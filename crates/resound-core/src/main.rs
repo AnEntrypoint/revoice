@@ -8,6 +8,8 @@ use resound_core::aliasfree::AmpBlock;
 use resound_core::univnet::UnivNet;
 use resound_core::cfm::{CfmSolver, WaveNet};
 use resound_core::chunking::{merge_chunks, split_chunks, ChunkConfig};
+use resound_core::denoiser::Denoiser;
+use resound_core::enhancer::Enhancer;
 
 fn check_unet() -> candle_core::Result<()> {
     let device = Device::Cpu;
@@ -140,7 +142,7 @@ fn check_real_weights() -> candle_core::Result<()> {
     Ok(())
 }
 
-fn check_edge_cases() {
+fn check_edge_cases() -> Result<(), realfft::FftError> {
     let empty: Vec<f32> = vec![];
     let resampler = Resampler::new(16000, 44100);
     let out = resampler.process(&empty);
@@ -152,7 +154,7 @@ fn check_edge_cases() {
 
     let mel = MelSpectrogram::new(44100.0, 2048, 420, 2048, 128, 0.0, 22050.0, 0.97);
     let tiny_wav = vec![0.1f32; 10];
-    let mel_out = mel.forward(&tiny_wav);
+    let mel_out = mel.forward(&tiny_wav)?;
     println!("edge_tiny_mel_frames={}", mel_out[0].len());
 
     let a = resampler.process(&single);
@@ -173,6 +175,7 @@ fn check_edge_cases() {
         short_wav.len(),
     );
     println!("edge_short_audio_merged_len={}", merged.len());
+    Ok(())
 }
 
 fn check_adversarial() {
@@ -213,20 +216,54 @@ fn check_adversarial() {
     // adjacent-row interaction: mel spectrogram consuming resampler output at a boundary size
     let mel = MelSpectrogram::new(44100.0, 2048, 420, 2048, 128, 0.0, 22050.0, 0.97);
     let boundary_resampled = resampler.process(&vec![0.2f32; 1]);
-    let mel_boundary = mel.forward(&boundary_resampled);
+    let mel_boundary = mel.forward(&boundary_resampled).expect("mel forward failed");
     println!("adv_pipeline_boundary_mel_frames={}", mel_boundary[0].len());
 }
 
-fn main() {
-    check_unet().expect("unet check failed");
-    check_irmae().expect("irmae check failed");
-    check_ampblock().expect("ampblock check failed");
-    check_univnet().expect("univnet check failed");
-    check_cfm().expect("cfm check failed");
+fn check_full_pipeline() -> candle_core::Result<()> {
+    let device = Device::Cpu;
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(
+            &["weights/enhancer_stage2.safetensors"],
+            DType::F32,
+            &device,
+        )?
+    };
+
+    let denoiser = Denoiser::new(vb.pp("denoiser"))?;
+    let sr = 44100usize;
+    let dur = 0.2f64;
+    let n = (sr as f64 * dur) as usize;
+    let freq = 440.0f32;
+    let wav: Vec<f32> = (0..n)
+        .map(|i| 0.3 * (2.0 * std::f32::consts::PI * freq * i as f32 / sr as f32).sin())
+        .collect();
+
+    let denoised = denoiser.forward(&wav, &device)?;
+    println!("pipeline_denoiser_input_len={} output_len={}", wav.len(), denoised.len());
+
+    let enhancer = Enhancer::new(vb, &device)?;
+    let enhanced = enhancer.forward(&wav, 4, 0.5, &device)?;
+    println!("pipeline_enhancer_input_len={} output_len={}", wav.len(), enhanced.len());
+
+    let very_short = vec![0.1f32; 512];
+    let denoised_short = denoiser.forward(&very_short, &device)?;
+    println!("pipeline_denoiser_short_input_len={} output_len={}", very_short.len(), denoised_short.len());
+
+    Ok(())
+}
+
+fn main() -> candle_core::Result<()> {
+    check_unet()?;
+    check_irmae()?;
+    check_ampblock()?;
+    check_univnet()?;
+    check_cfm()?;
     check_chunking();
-    check_real_weights().expect("real weight loading failed");
-    check_edge_cases();
+    check_real_weights()?;
+    check_edge_cases().map_err(candle_core::Error::wrap)?;
     check_adversarial();
+    check_full_pipeline()?;
     let sr = 16000usize;
     let freq = 440.0f32;
     let wav: Vec<f32> = (0..sr)
@@ -236,7 +273,7 @@ fn main() {
     let mel = MelSpectrogram::new(44100.0, 2048, 420, 2048, 128, 0.0, 22050.0, 0.97);
     let resampler = Resampler::new(sr, 44100);
     let resampled = resampler.process(&wav);
-    let mel_out = mel.forward(&resampled);
+    let mel_out = mel.forward(&resampled).map_err(candle_core::Error::wrap)?;
 
     println!("resampled_len={}", resampled.len());
     println!("mel_bins={} mel_frames={}", mel_out.len(), mel_out[0].len());
@@ -246,9 +283,12 @@ fn main() {
         .max_by(|a, b| {
             let sa: f32 = a.1.iter().sum();
             let sb: f32 = b.1.iter().sum();
-            sa.partial_cmp(&sb).unwrap()
+            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(i, _)| i)
-        .unwrap();
-    println!("peak_mel_bin={}", peak_bin);
+        .map(|(i, _)| i);
+    match peak_bin {
+        Some(bin) => println!("peak_mel_bin={}", bin),
+        None => println!("peak_mel_bin=none"),
+    }
+    Ok(())
 }

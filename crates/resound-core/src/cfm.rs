@@ -123,12 +123,13 @@ impl WaveNet {
             let (new_z, skip) = layer.forward(&z, &cond, &time_emb)?;
             z = new_z;
             skip_sum = Some(match skip_sum {
-                Some(acc) => (acc + skip).unwrap(),
+                Some(acc) => (acc + skip)?,
                 None => skip,
             });
         }
         let n = self.layers.len() as f64;
-        let skip_sum = (skip_sum.unwrap() / n.sqrt())?;
+        let skip_sum = skip_sum.ok_or_else(|| candle_core::Error::Msg("WaveNet has zero layers".into()))?;
+        let skip_sum = (skip_sum / n.sqrt())?;
         self.end.forward(&skip_sum)
     }
 }

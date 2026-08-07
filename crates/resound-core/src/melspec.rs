@@ -95,9 +95,9 @@ impl MelSpectrogram {
         out
     }
 
-    pub fn forward(&self, wav: &[f32]) -> Vec<Vec<f32>> {
+    pub fn forward(&self, wav: &[f32]) -> Result<Vec<Vec<f32>>, realfft::FftError> {
         let pre = self.apply_preemphasis(wav);
-        let frames = self.stft.forward(&pre);
+        let frames = self.stft.forward(&pre)?;
         let n_frames = frames.len();
         let n_mels = self.filterbank.len();
         let mut mel = vec![vec![0.0f32; n_frames]; n_mels];
@@ -113,7 +113,7 @@ impl MelSpectrogram {
                 mel[m][t] = acc;
             }
         }
-        mel
+        Ok(mel)
     }
 }
 

@@ -53,7 +53,7 @@ impl Stft {
         1 + (padded_len - self.n_fft) / self.hop_length
     }
 
-    pub fn forward(&self, wav: &[f32]) -> Vec<Vec<Complex32>> {
+    pub fn forward(&self, wav: &[f32]) -> Result<Vec<Vec<Complex32>>, realfft::FftError> {
         let padded = self.padded(wav);
         let n_frames = self.num_frames(wav.len());
         let mut frames = Vec::with_capacity(n_frames);
@@ -67,14 +67,13 @@ impl Stft {
             }
             let mut output = self.planner_fwd.make_output_vec();
             self.planner_fwd
-                .process_with_scratch(&mut input, &mut output, &mut scratch)
-                .unwrap();
+                .process_with_scratch(&mut input, &mut output, &mut scratch)?;
             frames.push(output);
         }
-        frames
+        Ok(frames)
     }
 
-    pub fn inverse(&self, frames: &[Vec<Complex32>], out_len: usize) -> Vec<f32> {
+    pub fn inverse(&self, frames: &[Vec<Complex32>], out_len: usize) -> Result<Vec<f32>, realfft::FftError> {
         let pad = self.n_fft / 2;
         let total_len = pad + out_len + pad + self.n_fft;
         let mut out = vec![0.0f32; total_len];
@@ -86,8 +85,7 @@ impl Stft {
             input.copy_from_slice(frame);
             let mut output = self.planner_inv.make_output_vec();
             self.planner_inv
-                .process_with_scratch(&mut input, &mut output, &mut scratch)
-                .unwrap();
+                .process_with_scratch(&mut input, &mut output, &mut scratch)?;
             let norm = 1.0 / self.n_fft as f32;
             for j in 0..self.n_fft {
                 out[start + j] += output[j] * norm * self.window[j];
@@ -99,6 +97,6 @@ impl Stft {
                 out[i] /= win_sum[i];
             }
         }
-        out[pad..pad + out_len].to_vec()
+        Ok(out[pad..pad + out_len].to_vec())
     }
 }

@@ -7,3 +7,6 @@ pub mod aliasfree;
 pub mod univnet;
 pub mod cfm;
 pub mod chunking;
+pub mod common;
+pub mod denoiser;
+pub mod enhancer;

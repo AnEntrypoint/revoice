@@ -973,6 +973,8 @@ dependencies = [
 name = "resound-wasm"
 version = "0.1.0"
 dependencies = [
+ "candle-core",
+ "candle-nn",
  "getrandom",
  "resound-core",
  "wasm-bindgen",

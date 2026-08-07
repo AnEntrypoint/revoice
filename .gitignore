@@ -5,7 +5,10 @@
 /web/resound_wasm_bg.wasm
 /web/resound_wasm_bg.wasm.d.ts
 /web/resound_wasm.d.ts
+/web/test_weights.safetensors
 *.stackdump
 /.agentplug-kv
 /.claude
 /.gm
+config.bat
+node_modules
