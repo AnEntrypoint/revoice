@@ -1,1 +1,0 @@
-we want to build resemble out to rust from https://github.com/resemble-ai/resemble-enhance so that we can run it in wasm in the browser, make it as performant as can be achieved

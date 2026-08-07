@@ -1,1 +1,0 @@
-{"data":"{\"duration_ms\":126,\"exit_code\":0,\"ok\":true,\"result\":null,\"stderr\":\"\",\"stdout\":\"OK\\nPython 3.12.6\\r\\n\",\"timed_out\":false}","dispatch_id":"1786108885214-70-1e40c748953e3072","next_dispatch_hint":"instruction","ok":true,"request_fingerprint":"c399811a334a0d4b","verb":"exec_js"}
