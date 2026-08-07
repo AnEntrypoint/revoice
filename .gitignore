@@ -1,0 +1,10 @@
+/target
+/.venv
+/weights
+/web/resound_wasm.js
+/web/resound_wasm_bg.wasm
+/web/resound_wasm_bg.wasm.d.ts
+/web/resound_wasm.d.ts
+*.stackdump
+/.agentplug-kv
+/.claude

@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>resound wasm check</title></head>
+<body>
+<script type="module">
+import init, { resound_version, resample_to_44100, mel_spectrogram_frames } from './resound_wasm.js';
+
+async function run() {
+  await init();
+  const version = resound_version();
+  const sine = new Float32Array(16000);
+  for (let i = 0; i < sine.length; i++) sine[i] = Math.sin(2 * Math.PI * 440 * i / 16000);
+  const resampled = resample_to_44100(sine, 16000);
+  const frames = mel_spectrogram_frames(resampled);
+  window.__resoundCheck = { version, resampledLen: resampled.length, melFrames: frames };
+  console.log('resound_check', JSON.stringify(window.__resoundCheck));
+}
+run();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+
+DevTools listening on ws://127.0.0.1:57124/devtools/browser/914e9264-892c-4006-984b-0bc7083e7a83
+[17316:11348:0807/150941.232:ERROR:components\device_event_log\device_event_log_impl.cc:200] [15:09:41.233] USB: usb_service_win.cc:108 SetupDiGetDeviceProperty({{A45C254E-DF1C-4EFD-8020-67D146A850E0}, 6}) failed: Element not found. (0x490)
+[17316:13512:0807/150942.868:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+[17316:13512:0807/150942.868:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+[17316:13512:0807/150942.875:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+Created TensorFlow Lite XNNPACK delegate for CPU.
+[17316:13512:0807/151004.723:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[17316:13512:0807/151102.304:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[17316:13512:0807/151253.198:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[17316:13512:0807/151546.877:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[17316:11348:0807/152250.090:ERROR:components\device_event_log\device_event_log_impl.cc:200] [15:22:50.081] USB: usb_service_win.cc:108 SetupDiGetDeviceProperty({{A45C254E-DF1C-4EFD-8020-67D146A850E0}, 6}) failed: Element not found. (0x490)
+[17316:13512:0807/152316.739:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[17316:11348:0807/152729.650:ERROR:components\device_event_log\device_event_log_impl.cc:200] [15:27:29.652] USB: usb_service_win.cc:108 SetupDiGetDeviceProperty({{A45C254E-DF1C-4EFD-8020-67D146A850E0}, 6}) failed: Element not found. (0x490)
+[17316:13512:0807/153437.304:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:484] ConnectionHandler failed with net error: -2
+[17316:13512:0807/153439.355:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:435] Failed to connect to MCS endpoint with error -106
+[17316:13512:0807/153453.842:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:484] ConnectionHandler failed with net error: -2

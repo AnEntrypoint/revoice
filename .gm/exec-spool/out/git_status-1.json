@@ -1,0 +1,1 @@
+{"data":{"deleted":[],"dirty":true,"modified":[],"staged":[],"untracked":[".agentplug-kv/",".cargo/",".claude/",".gitignore",".gm/","Cargo.lock","Cargo.toml","crates/","sh.exe.stackdump","tools/","web/"]},"dispatch_id":"1786112093368-141-90f516d363e074d4","next_dispatch_hint":"instruction","ok":true,"request_fingerprint":"5ef3185e339f47b0","verb":"git_status"}

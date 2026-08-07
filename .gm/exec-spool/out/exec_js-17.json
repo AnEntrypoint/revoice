@@ -1,0 +1,1 @@
+{"data":"{\"duration_ms\":72,\"exit_code\":0,\"ok\":true,\"result\":null,\"stderr\":\"\",\"stdout\":\"a= 0.08737802538415268\\nh(0.25)= 0.5000000000000001\",\"timed_out\":false}","dispatch_id":"1786106850723-46-fbe94518a26d3ab5","next_dispatch_hint":"instruction","ok":true,"request_fingerprint":"43ad804c13599128","verb":"exec_js"}

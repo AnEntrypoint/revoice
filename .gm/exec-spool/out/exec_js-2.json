@@ -1,0 +1,1 @@
+{"data":"{\"duration_ms\":539,\"exit_code\":0,\"ok\":true,\"result\":null,\"stderr\":\"\",\"stdout\":\"cargo 1.97.1 (c980f4866 2026-06-30)\\n\",\"timed_out\":false}","dispatch_id":"1786104438580-22-e7ef5ef56f4e39a2","next_dispatch_hint":"instruction","ok":true,"request_fingerprint":"0ed7aa5df6ac4992","verb":"exec_js"}
