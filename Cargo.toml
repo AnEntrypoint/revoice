@@ -7,8 +7,8 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-candle-core = "0.11"
-candle-nn = "0.11"
+candle-core = { version = "0.10", features = ["cuda"] }
+candle-nn = { version = "0.10", features = ["cuda"] }
 rustfft = "6"
 realfft = "3"
 serde = { version = "1", features = ["derive"] }

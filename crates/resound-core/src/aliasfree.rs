@@ -81,9 +81,8 @@ impl LowPassFilter1d {
         } else {
             kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
         };
-        let kernel = Tensor::from_vec(filt, (1, 1, kernel_size), device)?
-            .broadcast_as((channels, 1, kernel_size))?
-            .contiguous()?;
+        let tiled: Vec<f32> = filt.iter().cycle().take(channels * kernel_size).copied().collect();
+        let kernel = Tensor::from_vec(tiled, (channels, 1, kernel_size), device)?;
         let pad = kernel_size / 2 - 1;
         Ok(Self {
             kernel,
@@ -94,7 +93,7 @@ impl LowPassFilter1d {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = pad_replicate1d(x, self.pad, self.pad)?;
+        let x = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
         x.conv1d(&self.kernel, 0, self.stride, 1, self.channels)
     }
 }
@@ -118,9 +117,8 @@ impl UpSample1d {
             kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
         };
         let filt: Vec<f32> = filt.iter().map(|&v| v * ratio as f32).collect();
-        let kernel = Tensor::from_vec(filt, (1, 1, kernel_size), device)?
-            .broadcast_as((channels, 1, kernel_size))?
-            .contiguous()?;
+        let tiled: Vec<f32> = filt.iter().cycle().take(channels * kernel_size).copied().collect();
+        let kernel = Tensor::from_vec(tiled, (channels, 1, kernel_size), device)?;
         let pad = kernel_size / ratio - 1;
         let pad_left = pad * ratio + (kernel_size - ratio) / 2;
         let pad_right = pad * ratio + (kernel_size - ratio + 1) / 2;
@@ -135,7 +133,7 @@ impl UpSample1d {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = pad_replicate1d(x, self.pad, self.pad)?;
+        let x = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
         let out = x.conv_transpose1d(&self.kernel, 0, 0, self.ratio, 1, self.channels)?;
         let out = (out * self.ratio as f64)?;
         let len = out.dim(2)?;

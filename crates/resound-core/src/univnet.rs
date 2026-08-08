@@ -120,8 +120,8 @@ fn location_variable_convolution(
         if frame_len == 0 {
             continue;
         }
-        let k_f = kernel.narrow(4, f, 1)?.squeeze(4)?;
-        let bias_f = bias.narrow(2, f, 1)?;
+        let k_f = kernel.narrow(4, f, 1)?.squeeze(4)?.contiguous()?;
+        let bias_f = bias.narrow(2, f, 1)?.contiguous()?;
 
         let mut sample_outputs = Vec::with_capacity(frame_len);
         for s in 0..frame_len {
@@ -132,8 +132,10 @@ fn location_variable_convolution(
                 let idx = (center as i64 + offset).clamp(0, x.dim(2)? as i64 - 1) as usize;
                 taps.push(x.narrow(2, idx, 1)?);
             }
-            let window = Tensor::cat(&taps, 2)?.reshape((b, 1, c_in * ksize))?;
-            let k_mat = k_f.reshape((b, c_in * ksize, c_out))?;
+            let window = Tensor::cat(&taps, 2)?
+                .contiguous()?
+                .reshape((b, 1, c_in * ksize))?;
+            let k_mat = k_f.reshape((b, c_in * ksize, c_out))?.contiguous()?;
             let out_s = window.matmul(&k_mat)?.transpose(1, 2)?;
             sample_outputs.push((out_s + &bias_f)?);
         }
