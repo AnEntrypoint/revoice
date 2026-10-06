@@ -16,6 +16,22 @@ pub struct Enhancer {
     vocoder: UnivNet,
     n_mels: usize,
     z_scale: f64,
+    device: Device,
+}
+
+fn stage_ms(label: &str, started: std::time::Instant) {
+    if std::env::var("RESOUND_PROFILE").is_ok() {
+        eprintln!("{label}_ms={}", started.elapsed().as_millis());
+    }
+}
+
+const MAX_SOLVE_FRAMES: usize = 1680;
+
+fn max_solve_frames() -> usize {
+    std::env::var("RESOUND_SOLVE_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MAX_SOLVE_FRAMES)
 }
 
 impl Enhancer {
@@ -52,10 +68,61 @@ impl Enhancer {
             vocoder,
             n_mels,
             z_scale: 5.0,
+            device: device.clone(),
         })
     }
 
     pub fn forward(&self, wav: &[f32], nfe: usize, tau: f64, device: &Device) -> Result<Vec<f32>> {
+        let (abs_max, mel) = self.mel_of(wav)?;
+        let decoded = self.solve(&[mel], nfe, tau, device)?;
+        self.vocode(&decoded, abs_max, device)
+    }
+
+    pub fn forward_many(
+        &self,
+        chunks: &[Vec<f32>],
+        nfe: usize,
+        tau: f64,
+        device: &Device,
+    ) -> Result<Vec<Vec<f32>>> {
+        let prepared = chunks
+            .iter()
+            .map(|chunk| self.mel_of(chunk))
+            .collect::<Result<Vec<_>>>()?;
+
+        let max_frames = max_solve_frames();
+        let mut outputs = Vec::with_capacity(chunks.len());
+        let report_every = (chunks.len() / 10).max(1);
+        let mut next_report = report_every;
+        let mut start = 0usize;
+        while start < prepared.len() {
+            let frames = prepared[start].1.dim(2)?;
+            let mut end = start + 1;
+            let mut covered = frames;
+            while end < prepared.len()
+                && prepared[end].1.dim(2)? == frames
+                && covered + frames <= max_frames
+            {
+                covered += frames;
+                end += 1;
+            }
+            let mels: Vec<Tensor> = prepared[start..end].iter().map(|(_, mel)| mel.clone()).collect();
+            let decoded = self.solve(&mels, nfe, tau, device)?;
+            for (k, (abs_max, _)) in prepared[start..end].iter().enumerate() {
+                let mel = decoded.narrow(2, k * frames, frames)?;
+                outputs.push(self.vocode(&mel, *abs_max, device)?);
+            }
+            if outputs.len() >= next_report {
+                eprintln!("enhanced {}/{} chunks", outputs.len(), chunks.len());
+                next_report = (outputs.len() / report_every + 1) * report_every;
+            }
+            start = end;
+        }
+        Ok(outputs)
+    }
+
+    fn mel_of(&self, wav: &[f32]) -> Result<(f32, Tensor)> {
+        let started = std::time::Instant::now();
         let abs_max = wav.iter().fold(1e-8f32, |a, &b| a.max(b.abs()));
         let normalized: Vec<f32> = wav.iter().map(|&s| s / abs_max).collect();
 
@@ -67,15 +134,23 @@ impl Enhancer {
         let mut mel_flat = vec![0.0f32; self.n_mels * n_frames];
         for (m, row) in mel.iter().enumerate() {
             for (t, &v) in row.iter().enumerate() {
-                mel_flat[m * n_frames + t] = crate::melspec::normalize_db(
-                    crate::melspec::amp_to_db(v, 1e-4),
-                    -80.0,
-                );
+                mel_flat[m * n_frames + t] =
+                    crate::melspec::normalize_db(crate::melspec::amp_to_db(v, 1e-4), -80.0);
             }
         }
-        let mel_t = Tensor::from_vec(mel_flat, (1, self.n_mels, n_frames), device)?;
+        let mel_t = Tensor::from_vec(mel_flat, (1, self.n_mels, n_frames), &self.device)?;
         let mel_t = self.normalizer.forward(&mel_t)?;
+        stage_ms("mel", started);
+        Ok((abs_max, mel_t))
+    }
 
+    fn solve(&self, mels: &[Tensor], nfe: usize, tau: f64, device: &Device) -> Result<Tensor> {
+        let started = std::time::Instant::now();
+        let mel_t = if mels.len() == 1 {
+            mels[0].clone()
+        } else {
+            Tensor::cat(mels, 2)?
+        };
         let latent = self.ae_encoder.forward(&mel_t)?;
         let scaled_latent = (latent * self.z_scale)?;
 
@@ -87,11 +162,17 @@ impl Enhancer {
         let z = (z / self.z_scale)?;
 
         let decoded = self.ae_decoder.forward(&z)?;
+        stage_ms("cfm", started);
+        Ok(decoded)
+    }
 
+    fn vocode(&self, mel: &Tensor, abs_max: f32, device: &Device) -> Result<Vec<f32>> {
+        let started = std::time::Instant::now();
+        let n_frames = mel.dim(2)?;
         let vocoder_noise = Tensor::randn(0.0f32, 1.0f32, (1, 128, n_frames), device)?;
-        let out_wav = self.vocoder.forward(&vocoder_noise, &decoded)?;
+        let out_wav = self.vocoder.forward(&vocoder_noise, mel)?;
         let out_wav = out_wav.flatten_all()?.to_vec1::<f32>()?;
-
+        stage_ms("vocoder", started);
         Ok(out_wav.iter().map(|&s| s * abs_max).collect())
     }
 }

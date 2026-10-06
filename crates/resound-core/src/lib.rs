@@ -10,3 +10,6 @@ pub mod chunking;
 pub mod common;
 pub mod denoiser;
 pub mod enhancer;
+pub mod fastconv;
+pub mod gemm;
+pub mod profile;

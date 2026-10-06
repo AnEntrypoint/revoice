@@ -73,7 +73,7 @@ fn main() -> candle_core::Result<()> {
 
     let enhancer = Enhancer::new(vb, &device)?;
     let t1 = std::time::Instant::now();
-    let enhanced = enhancer.forward(&resampled, 8, 0.5, &device)?;
+    let enhanced = enhancer.forward(&resampled, 64, 0.5, &device)?;
     println!("enhance_elapsed_ms={}", t1.elapsed().as_millis());
     println!("enhanced_num_samples={}", enhanced.len());
     println!("enhanced_rms={:.6}", rms(&enhanced));

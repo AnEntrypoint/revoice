@@ -1,3 +1,6 @@
+const ALIGN_WINDOW: usize = 8192;
+const ALIGN_SHIFT: usize = 2048;
+
 pub struct ChunkConfig {
     pub sample_rate: usize,
     pub chunk_seconds: f64,
@@ -40,7 +43,8 @@ pub fn split_chunks(wav: &[f32], cfg: &ChunkConfig) -> Vec<(usize, Vec<f32>)> {
 fn cross_correlate_offset(prev_tail: &[f32], cur_head: &[f32], max_shift: usize) -> i64 {
     let mut best_shift = 0i64;
     let mut best_score = f64::MIN;
-    let n = prev_tail.len().min(cur_head.len());
+    let n = prev_tail.len().min(cur_head.len()).min(ALIGN_WINDOW);
+    let max_shift = max_shift.min(ALIGN_SHIFT).min(n.saturating_sub(1));
     for shift in -(max_shift as i64)..=(max_shift as i64) {
         let mut score = 0.0f64;
         let mut count = 0usize;

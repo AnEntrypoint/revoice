@@ -26,13 +26,15 @@ fn mel_to_hz(mel: f32) -> f32 {
     }
 }
 
+type SparseFilterbank = Vec<Vec<(usize, f32)>>;
+
 fn slaney_mel_filterbank(
     n_fft: usize,
     n_mels: usize,
     sample_rate: f32,
     f_min: f32,
     f_max: f32,
-) -> Vec<Vec<f32>> {
+) -> SparseFilterbank {
     let n_freqs = n_fft / 2 + 1;
     let fft_freqs: Vec<f32> = (0..n_freqs)
         .map(|i| i as f32 * sample_rate / n_fft as f32)
@@ -45,23 +47,27 @@ fn slaney_mel_filterbank(
         .collect();
     let hz_pts: Vec<f32> = mel_pts.iter().map(|&m| mel_to_hz(m)).collect();
 
-    let mut filters = vec![vec![0.0f32; n_freqs]; n_mels];
+    let mut filters = Vec::with_capacity(n_mels);
     for m in 0..n_mels {
         let (left, center, right) = (hz_pts[m], hz_pts[m + 1], hz_pts[m + 2]);
         let enorm = 2.0 / (right - left);
+        let mut band = Vec::new();
         for (k, &freq) in fft_freqs.iter().enumerate() {
             let up = (freq - left) / (center - left);
             let down = (right - freq) / (right - center);
             let w = up.min(down).max(0.0);
-            filters[m][k] = w * enorm;
+            if w > 0.0 {
+                band.push((k, w * enorm));
+            }
         }
+        filters.push(band);
     }
     filters
 }
 
 pub struct MelSpectrogram {
     stft: Stft,
-    filterbank: Vec<Vec<f32>>,
+    filterbank: SparseFilterbank,
     preemphasis: f32,
 }
 
@@ -102,13 +108,11 @@ impl MelSpectrogram {
         let n_mels = self.filterbank.len();
         let mut mel = vec![vec![0.0f32; n_frames]; n_mels];
         for (t, frame) in frames.iter().enumerate() {
-            let mag: Vec<f32> = frame.iter().map(|c| c.norm()).collect();
-            for m in 0..n_mels {
+            for (m, band) in self.filterbank.iter().enumerate() {
                 let mut acc = 0.0f32;
-                for (k, &w) in self.filterbank[m].iter().enumerate() {
-                    if w > 0.0 {
-                        acc += w * mag[k];
-                    }
+                for &(k, w) in band.iter() {
+                    let c = frame[k];
+                    acc += w * (c.re * c.re + c.im * c.im).sqrt();
                 }
                 mel[m][t] = acc;
             }

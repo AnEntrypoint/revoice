@@ -58,17 +58,17 @@ impl Stft {
         let n_frames = self.num_frames(wav.len());
         let mut frames = Vec::with_capacity(n_frames);
         let mut scratch = self.planner_fwd.make_scratch_vec();
+        let mut input = self.planner_fwd.make_input_vec();
+        let mut output = self.planner_fwd.make_output_vec();
         for i in 0..n_frames {
             let start = i * self.hop_length;
-            let mut input = self.planner_fwd.make_input_vec();
             for j in 0..self.n_fft {
                 let sample = padded.get(start + j).copied().unwrap_or(0.0);
                 input[j] = sample * self.window[j];
             }
-            let mut output = self.planner_fwd.make_output_vec();
             self.planner_fwd
                 .process_with_scratch(&mut input, &mut output, &mut scratch)?;
-            frames.push(output);
+            frames.push(output.clone());
         }
         Ok(frames)
     }
@@ -79,11 +79,11 @@ impl Stft {
         let mut out = vec![0.0f32; total_len];
         let mut win_sum = vec![0.0f32; total_len];
         let mut scratch = self.planner_inv.make_scratch_vec();
+        let mut input = self.planner_inv.make_input_vec();
+        let mut output = self.planner_inv.make_output_vec();
         for (i, frame) in frames.iter().enumerate() {
             let start = i * self.hop_length;
-            let mut input = self.planner_inv.make_input_vec();
             input.copy_from_slice(frame);
-            let mut output = self.planner_inv.make_output_vec();
             self.planner_inv
                 .process_with_scratch(&mut input, &mut output, &mut scratch)?;
             let norm = 1.0 / self.n_fft as f32;

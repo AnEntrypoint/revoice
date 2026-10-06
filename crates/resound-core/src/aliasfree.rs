@@ -1,5 +1,7 @@
 use candle_core::{Device, Result, Tensor};
-use candle_nn::{conv1d, Conv1d, Conv1dConfig, Module, VarBuilder};
+use candle_nn::{conv1d, Conv1dConfig, VarBuilder};
+
+use crate::fastconv::FastConv1d;
 
 fn i0(x: f64) -> f64 {
     let mut sum = 1.0f64;
@@ -69,7 +71,6 @@ pub struct LowPassFilter1d {
     kernel: Tensor,
     stride: usize,
     pad: usize,
-    channels: usize,
 }
 
 impl LowPassFilter1d {
@@ -88,20 +89,30 @@ impl LowPassFilter1d {
             kernel,
             stride: ratio,
             pad,
-            channels,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
-        x.conv1d(&self.kernel, 0, self.stride, 1, self.channels)
+        let dev = x.device().clone();
+        let src = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
+        let (_, channels, len) = src.dims3()?;
+        let ksize = self.kernel.dim(2)?;
+        let out_len = (len - ksize).div_euclid(self.stride) + 1;
+        let y = crate::fastconv::depthwise_correlate(
+            &src.squeeze(0)?,
+            &self.kernel.reshape((channels, ksize))?,
+            self.stride,
+            out_len,
+            0,
+        )?;
+        crate::profile::tick(&dev, "      downsample.conv");
+        y.unsqueeze(0)
     }
 }
 
 pub struct UpSample1d {
     kernel: Tensor,
     ratio: usize,
-    channels: usize,
     pad: usize,
     pad_left: usize,
     pad_right: usize,
@@ -116,7 +127,10 @@ impl UpSample1d {
         } else {
             kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
         };
-        let filt: Vec<f32> = filt.iter().map(|&v| v * ratio as f32).collect();
+        let filt: Vec<f32> = filt
+            .iter()
+            .map(|&v| v * ratio as f32 * ratio as f32)
+            .collect();
         let tiled: Vec<f32> = filt.iter().cycle().take(channels * kernel_size).copied().collect();
         let kernel = Tensor::from_vec(tiled, (channels, 1, kernel_size), device)?;
         let pad = kernel_size / ratio - 1;
@@ -125,7 +139,6 @@ impl UpSample1d {
         Ok(Self {
             kernel,
             ratio,
-            channels,
             pad,
             pad_left,
             pad_right,
@@ -133,12 +146,21 @@ impl UpSample1d {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
-        let out = x.conv_transpose1d(&self.kernel, 0, 0, self.ratio, 1, self.channels)?;
-        let out = (out * self.ratio as f64)?;
-        let len = out.dim(2)?;
-        let new_len = len.saturating_sub(self.pad_left + self.pad_right);
-        out.narrow(2, self.pad_left, new_len)
+        let dev = x.device().clone();
+        let src = pad_replicate1d(x, self.pad, self.pad)?.contiguous()?;
+        let (_, channels, len) = src.dims3()?;
+        let ksize = self.kernel.dim(2)?;
+        let raw_len = (len - 1) * self.ratio + ksize;
+        let out = crate::fastconv::depthwise_transpose(
+            &src.squeeze(0)?,
+            &self.kernel.reshape((channels, ksize))?,
+            self.ratio,
+            0,
+            raw_len,
+        )?;
+        crate::profile::tick(&dev, "      upsample.convtr");
+        let new_len = raw_len.saturating_sub(self.pad_left + self.pad_right);
+        out.unsqueeze(0)?.narrow(2, self.pad_left, new_len)
     }
 }
 
@@ -157,8 +179,12 @@ impl SnakeBeta {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let alpha = self.log_alpha.exp()?.clamp(1e-2, 50.0)?.reshape((1, (), 1))?;
         let beta = self.log_beta.exp()?.clamp(1e-2, 50.0)?.reshape((1, (), 1))?;
-        let sin_ax = x.broadcast_mul(&alpha)?.sin()?;
-        let term = sin_ax.sqr()?.broadcast_div(&beta)?;
+        let sin_input = x.broadcast_mul(&alpha)?;
+        let sin_ax = sin_input.sin()?;
+        drop(sin_input);
+        let squared = sin_ax.sqr()?;
+        let term = squared.broadcast_div(&beta)?;
+        drop(squared);
         x + term
     }
 }
@@ -179,14 +205,19 @@ impl UpActDown {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let dev = x.device().clone();
         let x = self.upsample.forward(x)?;
+        crate::profile::tick(&dev, "    upactdown.up");
         let x = self.act.forward(&x)?;
-        self.downsample.forward(&x)
+        crate::profile::tick(&dev, "    upactdown.snake");
+        let y = self.downsample.forward(&x)?;
+        crate::profile::tick(&dev, "    upactdown.down");
+        Ok(y)
     }
 }
 
 pub struct AmpBlock {
-    layers: Vec<(Conv1d, UpActDown, Conv1d)>,
+    layers: Vec<(FastConv1d, UpActDown, FastConv1d)>,
 }
 
 impl AmpBlock {
@@ -206,17 +237,23 @@ impl AmpBlock {
                 ..Default::default()
             };
             let conv2 = conv1d(channels, channels, 3, cfg2, layer_vb.pp("2"))?;
-            layers.push((conv1, act, conv2));
+            layers.push((
+                FastConv1d::from_conv1d(&conv1)?,
+                act,
+                FastConv1d::from_conv1d(&conv2)?,
+            ));
         }
         Ok(Self { layers })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let mut h = x.clone();
-        for (conv1, act, conv2) in &self.layers {
+        for (i, (conv1, act, conv2)) in self.layers.iter().enumerate() {
             h = conv1.forward(&h)?;
+            crate::profile::tick(x.device(), &format!("  amp.layer{i}.conv1"));
             h = act.forward(&h)?;
             h = conv2.forward(&h)?;
+            crate::profile::tick(x.device(), &format!("  amp.layer{i}.conv2"));
         }
         x + h
     }

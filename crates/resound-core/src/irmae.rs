@@ -1,12 +1,14 @@
 use candle_core::{Result, Tensor};
-use candle_nn::{conv1d, conv1d_no_bias, group_norm, Conv1d, Conv1dConfig, GroupNorm, Module, VarBuilder};
+use candle_nn::{conv1d, conv1d_no_bias, group_norm, Conv1dConfig, GroupNorm, Module, VarBuilder};
+
+use crate::fastconv::FastConv1d;
 
 fn gelu(x: &Tensor) -> Result<Tensor> {
     x.gelu_erf()
 }
 
 struct ResBlock1d {
-    layers: Vec<(GroupNorm, Conv1d)>,
+    layers: Vec<(GroupNorm, FastConv1d)>,
 }
 
 impl ResBlock1d {
@@ -22,7 +24,7 @@ impl ResBlock1d {
                 ..Default::default()
             };
             let conv = conv1d(dim, dim, 3, cfg, vb.pp(conv_idx.to_string()))?;
-            layers.push((norm, conv));
+            layers.push((norm, FastConv1d::from_conv1d(&conv)?));
         }
         Ok(Self { layers })
     }
@@ -38,9 +40,9 @@ impl ResBlock1d {
 }
 
 pub struct IrmaeEncoder {
-    stem: Conv1d,
+    stem: FastConv1d,
     res_blocks: Vec<ResBlock1d>,
-    rank_convs: Vec<Conv1d>,
+    rank_convs: Vec<FastConv1d>,
 }
 
 impl IrmaeEncoder {
@@ -66,11 +68,13 @@ impl IrmaeEncoder {
         let mut dim = hidden_dim;
         for i in 0..num_rank_convs {
             let idx = 1 + num_res + i;
-            rank_convs.push(conv1d_no_bias(dim, latent_dim, 1, cfg1, vb.pp(idx.to_string()))?);
+            rank_convs.push(FastConv1d::from_conv1d(&conv1d_no_bias(
+                dim, latent_dim, 1, cfg1, vb.pp(idx.to_string()),
+            )?)?);
             dim = latent_dim;
         }
         Ok(Self {
-            stem,
+            stem: FastConv1d::from_conv1d(&stem)?,
             res_blocks,
             rank_convs,
         })
@@ -89,9 +93,9 @@ impl IrmaeEncoder {
 }
 
 pub struct IrmaeDecoder {
-    stem: Conv1d,
+    stem: FastConv1d,
     res_blocks: Vec<ResBlock1d>,
-    out_conv: Conv1d,
+    out_conv: FastConv1d,
 }
 
 impl IrmaeDecoder {
@@ -115,9 +119,9 @@ impl IrmaeDecoder {
         let out_idx = 1 + num_res;
         let out_conv = conv1d(hidden_dim, output_dim, 1, cfg1, vb.pp(out_idx.to_string()))?;
         Ok(Self {
-            stem,
+            stem: FastConv1d::from_conv1d(&stem)?,
             res_blocks,
-            out_conv,
+            out_conv: FastConv1d::from_conv1d(&out_conv)?,
         })
     }
 
