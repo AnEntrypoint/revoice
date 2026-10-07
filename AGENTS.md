@@ -99,8 +99,12 @@ fraction of frames below 0.9, plus band-energy delta per decade from 0 to 22 kHz
 nfe 16's deviation from nfe 32 is the same size and shape as nfe 32's from the upstream default of
 64, and its HF noise floor over the input's 60 quietest frames is 0.7 dB *lower* than nfe 32's, so
 it is not under-converged hiss — the extra ~1 dB sits in the band the model invents anyway (the
-input has nothing above 8 kHz; the render is bandwidth extension). Chunk 10 was not faster than
-chunk 5 (1.60x vs 1.67x) and costs ~900 MiB more, so the default stays 5.
+input has nothing above 8 kHz; the render is bandwidth extension). Chunk 10 is only 2 % faster
+than chunk 5 — 378 s of lecture, A/B/A/B on an idle card, 112.9 and 114.0 s against 114.8 and
+117.1 s — and costs ~900 MiB more, so the default stays 5, and the batch does not take it either
+(see Batch): nothing reaches the wav until all 24 chunks of a batch are rendered, so its 234 s of
+audio per batch doubles the window in which a death loses the whole piece. The older note that
+chunk 10 was slower (1.60x vs 1.67x) was measured on a shared card and does not hold.
 
 ## Verifying output
 
@@ -174,15 +178,19 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
 `C:\D\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
 Config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, with chunk and piece length picked per file by
-`pick_chunk()`. Overlap is 0.25 s because it is 5 % duplicated audio instead of 11 % and measures
-4.5 % faster (see Memory). Chunk 5 (~3.2 GB) only fits when the card is otherwise free, so the script asks
-`nvidia-smi` for free memory and takes chunk 5 with 450 s pieces above `CHUNK_FREE_MIB=4000`,
-else chunk 3 with 250 s pieces and chunk 2 as the retry. It is worth taking when it fits: in a
+`pick_chunk()`: chunk 5 with 450 s pieces above `CHUNK_FREE_MIB=4000` MiB free, else chunk 3 with
+250 s pieces — and chunk 3 is also the retry chunk under a 5 (2 under a 3). Overlap is 0.25 s because
+it is 5 % duplicated audio instead of 11 % and measures 4.5 % faster (see Memory). Chunk 10 was
+tried as a third tier above 5000 MiB and reverted: 2 % faster but 234 s of audio per flush batch
+instead of 114 s, so it doubles the window in which a death loses the whole piece, and it died
+38 s into its first production piece. It is worth taking the bigger window when it fits: in a
 45 min window chunk 5 rendered ~4000 s of audio in 340/349/401/405 s (2.67x) against chunk 3's
 baseline of 390/486/519 s for ~2755 s (1.97x), and it duplicates 11 % of the audio instead of 20 %.
 Deaths scale with process starts as well as time under load — 225 s pieces lost 11.5 per
 audio-hour, chunk 3 at 450 s 6.5, chunk 5 at 450 s 4.5 — which is why the 225 s experiment was
-reverted. So ~7 days of enhancing for the 447.8 h rather than ~9, plus ~20 h of decode/encode.
+reverted. Pieces measure 3.26-3.38x and a whole ~1122 s file lands at 3.0x end to end — 371 s for
+decode, three pieces, join and encode — so ~6 days of enhancing for the 447.8 h rather than ~9,
+plus ~20 h of decode/encode.
 The 192 kbps mp3 encode is transparent: the same
 60 s slice measures flatness 0.0290 taken from a batch mp3 and 0.0294 from a wav render of the same
 source.
@@ -245,6 +253,12 @@ that bit once and are now guarded:
   card costs 4 s a piece instead of 126 s. Bursts are still real (six events in four minutes once)
   and a retry landing inside one loses the file rather than the piece — `Love Series 1B - Human
   Love` went exactly that way and recovered on the next run — so the wait stays, behind the probe.
+- The encode is pure CPU and the enhance is GPU, so one file's encode no longer sits in front of
+  the next one: `$TMP/in.enhance.wav` is renamed to `enc.wav` and handed to ffmpeg in the
+  background, and `finish_encode()` settles the `.part` rename a whole file later, at the point the
+  next encode would be launched (and once more after the loop ends) — 8-18 s per file the card used
+  to idle through. Settling it at the top of the next iteration instead only moves the wait, it does
+  not hide it: `WAIT_encode` read 19 s both ways.
 - Pieces are 450 s because a longer one dies: candle has no pooling allocator, so every chunk is
   thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min piece dies past
   ~100 chunks, while the same audio in 450 s pieces does not. The gate before a piece is under
