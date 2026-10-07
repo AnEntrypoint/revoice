@@ -31,11 +31,19 @@ same clip took 36 s (1.67x) minutes later after `nvidia-smi --query-compute-apps
 Chrome pids held CUDA contexts and those two were killed (GPU 100 %/2246 MiB -> 0 %/21 MiB). So
 before any timing run: check `--query-compute-apps`, kill the pids holding contexts, and confirm
 util is near 0 and memory near 0. Only compare runs that are back to back, and after sustained
-load let it cool ~75 s first. VRAM headroom decides the chunk size: chunk 5 needs ~3.6 GB, so it
-fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills the process. Two hours
-of near-continuous work took it to 88 °C and 3x slower on every GPU stage while the CPU-side mel
-stage did not move at all — a stage that slows on GPU stages only is heat or contention, not a
-regression. Prefer ratios inside one run over absolute ms.
+load let it cool ~75 s first. Sharing costs ~10x, not 3x: the same 60 s clip at nfe 16 took
+17.8 s alone and 183.9 s with one headless Chrome context beside it, and nfe 32 measured 2.72x
+and 0.33x in the same hour.
+
+Every Chrome on this box is headless gm automation (no window: check `MainWindowTitle`), and a new
+one comes back within minutes of being killed, so one kill per piece is not enough —
+`testsound/lectures/gpuwatch.sh` kills every non-resound CUDA client every 45 s while
+`resound.exe` is alive. `nvidia-smi -pl` and `-c` both answer Insufficient Permissions here, so
+the power cap and exclusive compute mode are not available; the card runs 82-83 C at ~60 W with
+clocks pinned 1267/2100 MHz (SW Thermal Slowdown) and still delivers ~2.5x, so heat is not worth
+waiting on, contention is. VRAM headroom decides the chunk size: chunk 5 needs ~3.6 GB, so it
+fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills the process.
+Prefer ratios inside one run over absolute ms.
 
 ## Memory
 
@@ -60,6 +68,23 @@ so one call covering several chunks amortises the fixed part: grouping 3 chunks 
 per-chunk solves 9.8 s vs 13.3 s on 15 s of audio. A batch of 3 files (88.8 s of audio) ran at
 1.43x.
 
+nfe is the one knob that buys real time. On a 60 s clip with the card free, tf32 gave nfe 64
+1.67x, nfe 32 2.72x, nfe 24 2.98x, nfe 16 3.17-3.37x (nfe 8 was not faster than 16). Quality,
+each measured against nfe 32 on the same clip (per-frame log-mel cosine, mean / 1st percentile /
+fraction of frames below 0.9, plus band-energy delta per decade from 0 to 22 kHz):
+
+| nfe | cosine | p1 | frac < 0.9 | band delta | speed |
+|---|---|---|---|---|---|
+| 64 | 0.9609 | 0.871 | 3.0 % | within 0.17 dB | 1.0x |
+| 24 | 0.9653 | — | — | within 0.39 dB (top band -0.11) | 1.10x |
+| 16 | 0.9587 | 0.872 | 2.9 % | within 1.04 dB, all of it above 8 kHz | 1.24x |
+
+nfe 16's deviation from nfe 32 is the same size and shape as nfe 32's from the upstream default of
+64, and its HF noise floor over the input's 60 quietest frames is 0.7 dB *lower* than nfe 32's, so
+it is not under-converged hiss — the extra ~1 dB sits in the band the model invents anyway (the
+input has nothing above 8 kHz; the render is bandwidth extension). Chunk 10 was not faster than
+chunk 5 (1.60x vs 1.67x) and costs ~900 MiB more, so the default stays 5.
+
 ## Verifying output
 
 Two runs of the same config are bit-identical (fixed randn sequence). A change that alters the op
@@ -68,6 +93,87 @@ configs is ~0.016 and means nothing. Compare instead: per-frame log-mel cosine (
 equivalent renders, 0.78 against the input on lecture speech) and average magnitude spectrum.
 Seam clicks: max adjacent-sample delta inside the overlap window must stay below the file's global
 max delta.
+
+## Quality: how "damaged" was found and fixed
+
+Upstream ground truth lives in `C:\dev\refenv` (Python 3.12, torch+cpu, `resemble-enhance` 0.0.1,
+HF repo checked out at `C:\dev\refenv\Lib\site-packages\resemble_enhance\model_repo`). Run it with
+`testsound/lectures/probe.py src.wav out.wav lambd nfe` (needs the `pathlib.PosixPath =
+pathlib.WindowsPath` shim). It also monkeypatches `UnivNet.forward` and `IRMAE.encode` to dump the
+conditioning mel (`out.wav.cond.f32`, 160 ch) and the latent, which is what makes module-level
+comparison possible.
+
+The metric that caught the damage is spectral flatness over 100-4000 Hz (geometric/arithmetic mean
+of the power spectrum, `crest.py`) plus `hf.py`'s loud-vs-quiet band levels: real enhancement gates
+HF with speech, hiss does not. On 60 s of lecture audio, source 0.0439 -> render 0.0153 flatness,
+crest 14.35 -> 15.66 dB, 8-16 kHz from -69 dB (absent) to -29 dB loud but -58 dB quiet, and
+`corr(log 300-3k, log 8-16k)` from 0.049 to 0.732. Upstream renders 0.0207-0.0211 flatness on the
+same material, so that range is the target.
+
+Localising it took dumping our own tensors and diffing against upstream's: `RESOUND_DUMP_MEL=<dir>`
+writes the conditioning mel and the decoded 160 ch; `RESOUND_COND_FILE=<f32>` feeds a 160-ch cond
+straight to the vocoder, skipping mel/AE/CFM. That last hook settled it — with upstream's own cond
+mel our vocoder still produced flatness 0.1927, so the whole mel->IRMAE->CFM->decode path was fine
+(our cond statistics match upstream's to 3 digits: std 1.244 vs 1.250, jitter 0.3217 vs 0.3215,
+cos(cond128, mel) 0.5564 vs 0.5575) and the vocoder was not.
+
+The bug was `UpSample1d` in `aliasfree.rs`: it scaled the Kaiser filter by `ratio²` where upstream
+(`univnet/alias_free_torch/resample.py`) applies `ratio` once, as a gain on the transposed-conv
+output. Every AMP branch in every LVC block therefore ran 2x too hot, and `SnakeBeta` is nonlinear
+so it did not cancel. With the fix the same upstream cond renders 0.0180 flatness vs upstream's own
+0.0211. Two related port errors fixed at the same time: the Kaiser rolloff denominator (upstream is
+`torch.kaiser_window(K, periodic=False)`, i.e. divide by `(K-1)/2`, not `K/2`) and the sinusoidal
+time-embedding grid (`linspace(0, 4, 64)` has step `4/63`, not `4/64`). The `filter` buffers *are*
+in the checkpoint (24 of them), so the Kaiser code itself is only a fallback.
+
+`z_scale` is 6, not the upstream dataclass default of 5: `model_repo/enhancer_stage2/hparams.yaml`
+says `lcfm_z_scale: 6` and `HParams.load` reads the yaml.
+
+Still missing versus upstream: the denoiser stage (`lambd` in `enhance()`), which is a separate
+model we do not ship, and `vocoder(npad=10)` (pad cond 10 frames, trim 4200 samples) — that one is
+equivalent, both yield `T * 420` samples. Ours also does not drop the last mel frame the way
+upstream's `to_mel(drop_last=True)` does; empirically both give the same frame count.
+
+## Batch
+
+`testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
+`D:\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
+Config: `GEMM=tf32 NFE=16 CHUNK=5 OVERLAP=0.5`, about 3.2x realtime on a free card, so ~6 days
+plus ~20 h of decode/encode. Run it behind `gpuwatch.sh` (see above) or contention takes it to
+0.33x.
+
+Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
+join and encode end to end in minutes. Every file is cut into equal 450 s pieces (0.5 s overlap)
+and rejoined with `join.py`, which streams and keeps only the overlap tail. Output lands in
+`C:\D\Downloads\Manly_P.Hall_Enhanced` — a `C:` path, like the source; `D:\temp_resound` is only
+scratch.
+
+Each file: decode to 44.1 kHz mono wav, enhance, encode to `$dest.part`, rename. An existing
+non-empty output means done, so the run is resumable and reruns only pick up failures. Things
+that bit once and are now guarded:
+
+- `ffmpeg` reads stdin and will eat the file list out from under a `while read` loop; every call
+  is `-nostdin` with `</dev/null`. `ffprobe` has no `-nostdin` (it errors on the flag), so it only
+  gets `</dev/null`.
+- An empty `ffprobe` duration silently collapses the plan to one piece, which on a long file means
+  one 1.2 GB enhance; the plan is validated and the file is skipped with `FAIL_PLAN`.
+- Stopping a background task kills the wrapper, not the script, and two live instances share one
+  temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
+- A silent resound death is VRAM or a driver reset: the script waits for the card under 85 C and
+  under 1.5 GB used before each piece, then retries twice at chunk 3. The temperature gate used to
+  be 78 C, which bought minutes of idle per piece for nothing — at 83 C and 1267 MHz a 539 s file
+  still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
+  every chunk is thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min
+  piece dies past ~100 chunks, while the same audio in 450 s pieces does not.
+- A run that prints `device=Cpu` has lost CUDA and is ~1000x slower while looking perfectly
+  healthy. It happened once when the machine suspended mid-run and came back with
+  `cuda:0 unavailable`; `run_enhance` now checks every piece for that line and stops the batch.
+  `stayawake.ps1` holds an `ES_CONTINUOUS|ES_SYSTEM_REQUIRED` request for the life of the run
+  because `powercfg /change` and `/setacvalueindex` both answer Invalid Parameters here.
+- Start it detached: `start_batch.bat` (and `start_watch.bat`) launched with `Start-Process`, since
+  a `run_in_background` task dies with the session. `Start-Process -ArgumentList '-c','cmd'` does
+  not quote the second element, so bash sees `-c cmd` and silently runs the first word — put the
+  whole command in the .bat instead.
 
 ## Chunk seams
 

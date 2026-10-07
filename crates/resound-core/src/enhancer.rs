@@ -19,6 +19,24 @@ pub struct Enhancer {
     device: Device,
 }
 
+fn dump_mel(input: &Tensor, decoded: &Tensor) {
+    let dir = match std::env::var("RESOUND_DUMP_MEL") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let write = |name: &str, t: &Tensor| -> Result<()> {
+        let v = t.contiguous()?.flatten_all()?.to_vec1::<f32>()?;
+        let mut bytes = Vec::with_capacity(v.len() * 4);
+        for f in v.iter() {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        let path = format!("{}/{}_{}_{}_{}.f32", dir, name, t.dim(0)?, t.dim(1)?, t.dim(2)?);
+        std::fs::write(path, bytes).map_err(candle_core::Error::wrap)
+    };
+    let _ = write("mel", input);
+    let _ = write("dec", decoded);
+}
+
 fn stage_ms(label: &str, started: std::time::Instant) {
     if std::env::var("RESOUND_PROFILE").is_ok() {
         eprintln!("{label}_ms={}", started.elapsed().as_millis());
@@ -67,7 +85,7 @@ impl Enhancer {
             cfm_net,
             vocoder,
             n_mels,
-            z_scale: 5.0,
+            z_scale: 6.0,
             device: device.clone(),
         })
     }
@@ -144,7 +162,21 @@ impl Enhancer {
         Ok((abs_max, mel_t))
     }
 
+    fn load_cond(device: &Device) -> Option<Tensor> {
+        let path = std::env::var("RESOUND_COND_FILE").ok()?;
+        let bytes = std::fs::read(path).ok()?;
+        let floats: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let frames = floats.len() / 160;
+        Tensor::from_vec(floats, (1, 160, frames), device).ok()
+    }
+
     fn solve(&self, mels: &[Tensor], nfe: usize, tau: f64, device: &Device) -> Result<Tensor> {
+        if let Some(cond) = Self::load_cond(device) {
+            return Ok(cond);
+        }
         let started = std::time::Instant::now();
         let mel_t = if mels.len() == 1 {
             mels[0].clone()
@@ -154,14 +186,30 @@ impl Enhancer {
         let latent = self.ae_encoder.forward(&mel_t)?;
         let scaled_latent = (latent * self.z_scale)?;
 
-        let noise = Tensor::randn(0.0f32, 1.0f32, scaled_latent.dims(), device)?;
-        let psi0 = ((noise * tau)? + (scaled_latent * (1.0 - tau))?)?;
+        let decode_scale: f64 = std::env::var("RESOUND_DECODE_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0);
+        let mode = std::env::var("RESOUND_SOLVE_MODE").unwrap_or_default();
+        let ae_mode = mode == "ae";
+        if mode == "mel" {
+            let zeros = Tensor::zeros((1, 32, mel_t.dim(2)?), mel_t.dtype(), mel_t.device())?;
+            return Tensor::cat(&[&mel_t, &zeros], 1);
+        }
+        let decoded = if ae_mode {
+            let z = (scaled_latent / self.z_scale)?;
+            self.ae_decoder.forward(&(z * decode_scale)?)?
+        } else {
+            let noise = Tensor::randn(0.0f32, 1.0f32, scaled_latent.dims(), device)?;
+            let psi0 = ((noise * tau)? + (scaled_latent * (1.0 - tau))?)?;
 
-        let solver = CfmSolver::new(nfe);
-        let z = solver.sample(&self.cfm_net, &mel_t, &psi0, device)?;
-        let z = (z / self.z_scale)?;
+            let solver = CfmSolver::new(nfe);
+            let z = solver.sample(&self.cfm_net, &mel_t, &psi0, device)?;
+            let z = (z / self.z_scale)?;
 
-        let decoded = self.ae_decoder.forward(&z)?;
+            self.ae_decoder.forward(&(z * decode_scale)?)?
+        };
+        dump_mel(&mel_t, &decoded);
         stage_ms("cfm", started);
         Ok(decoded)
     }
@@ -169,7 +217,12 @@ impl Enhancer {
     fn vocode(&self, mel: &Tensor, abs_max: f32, device: &Device) -> Result<Vec<f32>> {
         let started = std::time::Instant::now();
         let n_frames = mel.dim(2)?;
+        let noise_scale: f64 = std::env::var("RESOUND_VOCODER_NOISE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0);
         let vocoder_noise = Tensor::randn(0.0f32, 1.0f32, (1, 128, n_frames), device)?;
+        let vocoder_noise = (vocoder_noise * noise_scale)?;
         let out_wav = self.vocoder.forward(&vocoder_noise, mel)?;
         let out_wav = out_wav.flatten_all()?.to_vec1::<f32>()?;
         stage_ms("vocoder", started);

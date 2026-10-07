@@ -43,7 +43,7 @@ pub fn kaiser_sinc_filter1d(cutoff: f64, half_width: f64, kernel_size: usize) ->
         } else {
             (2.0 * std::f64::consts::PI * cutoff * t).sin() / (std::f64::consts::PI * t)
         };
-        let ratio = t / half_size;
+        let ratio = t / ((kernel_size as f64 - 1.0) / 2.0);
         let arg = beta * (1.0 - ratio * ratio).max(0.0).sqrt();
         let window = i0(arg) / denom;
         let v = sinc_val * window;
@@ -127,10 +127,7 @@ impl UpSample1d {
         } else {
             kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
         };
-        let filt: Vec<f32> = filt
-            .iter()
-            .map(|&v| v * ratio as f32 * ratio as f32)
-            .collect();
+        let filt: Vec<f32> = filt.iter().map(|&v| v * ratio as f32).collect();
         let tiled: Vec<f32> = filt.iter().cycle().take(channels * kernel_size).copied().collect();
         let kernel = Tensor::from_vec(tiled, (channels, 1, kernel_size), device)?;
         let pad = kernel_size / ratio - 1;

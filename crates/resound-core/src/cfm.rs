@@ -6,7 +6,7 @@ use crate::fastconv::FastConv1d;
 fn sinusoidal_time_embedding(t: &Tensor, dim: usize, device: &Device) -> Result<Tensor> {
     let half = dim / 2;
     let powers: Vec<f32> = (0..half)
-        .map(|i| 10f32.powf(4.0 * i as f32 / half as f32))
+        .map(|i| 10f32.powf(4.0 * i as f32 / (half as f32 - 1.0)))
         .collect();
     let powers = Tensor::from_vec(powers, half, device)?;
     let t = t.reshape((t.elem_count(), 1))?;
