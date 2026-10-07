@@ -268,7 +268,9 @@ that bit once and are now guarded:
   background, and `finish_encode()` settles the `.part` rename a whole file later, at the point the
   next encode would be launched (and once more after the loop ends) — 8-18 s per file the card used
   to idle through. Settling it at the top of the next iteration instead only moves the wait, it does
-  not hide it: `WAIT_encode` read 19 s both ways.
+  not hide it: `WAIT_encode` read 19 s both ways. One consequence when reading the log: the
+  `OK wall_s=` line for a file is written when the *next* file's pieces are done, not its own, so
+  the completions appear one file behind the `PLAN` lines.
 - Pieces are 450 s because a longer one dies: candle has no pooling allocator, so every chunk is
   thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min piece dies past
   ~100 chunks, while the same audio in 450 s pieces does not. The gate before a piece is under
