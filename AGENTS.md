@@ -118,6 +118,16 @@ dominate it (the *source* folds to -6.7 dB at frame 0 where our render of a diff
 +5.9 dB). Fold the RMS of out/src instead, which removes the content: on a 60 s batch render the
 overlap window averages -5.62 dB and the rest of the period -5.24 dB, with no dip at the boundary.
 
+`testsound/lectures/qa.py` is that check as a sweep: it takes finished mp3s, decodes 60 s at 300 s
+from each and prints flatness, corr and the loud-vs-quiet drop, aggregated the way `crest.py` does
+it — per frame, then the median across frames. Averaging the spectra first instead weights the loud
+frames and reads ~2x lower, so the two are not interchangeable. Over the first 28 finished lectures:
+flatness 0.0157-0.0375, corr 0.634-0.889, drop 44-273 dB, nothing flagged (thresholds flat < 0.040,
+corr > 0.50, drop > 25 dB). The spread is the material, not damage: the least clean render (0.0375)
+comes from a 0.0887 source and the cleanest (0.0157) from a 0.0363 one, a 2.3-3.2x collapse either
+way. It deletes its slice before decoding, because a decode that fails silently would otherwise be
+measured again under the next file's name.
+
 ## Quality: how "damaged" was found and fixed
 
 Upstream ground truth lives in `C:\dev\refenv` (Python 3.12, torch+cpu, `resemble-enhance` 0.0.1,
