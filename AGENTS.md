@@ -49,6 +49,10 @@ so heat is not worth waiting on, contention is. VRAM headroom decides the chunk 
 needs ~3.6 GB, so it fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills
 the process. Prefer ratios inside one run over absolute ms.
 
+Time A/B/A, never A/B: baseline, candidate, baseline again, with the same fixed rest between runs
+(`testsound/lectures/ab*.sh` use 15-20 s). Drift then reads as a gap between the two baselines
+instead of as a speedup.
+
 ## Memory
 
 6 GB card. Peak VRAM is set by `--chunk-seconds`, not by file length: chunk 5 ≈ 3.2 GB,
@@ -181,7 +185,8 @@ that bit once and are now guarded:
 - Stopping a background task kills the wrapper, not the script, and two live instances share one
   temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
 - A silent resound death is VRAM or a driver reset: the script waits for the card under 85 C and
-  under 1.5 GB used before each piece, then retries twice at chunk 3. The temperature gate used to
+  under 1.5 GB used before each piece — capped at 12 polls x 20 s, so never more than 4 min — then
+retries twice at chunk 3. The temperature gate used to
   be 78 C, which bought minutes of idle per piece for nothing — at 83 C and 1267 MHz a 539 s file
   still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
   every chunk is thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min
