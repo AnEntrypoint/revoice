@@ -337,6 +337,11 @@ The gate is last (`agate=threshold=0.00316:ratio=4:range=0.415:attack=20:release
 the material: 5.0-5.1 dB off the quiet-frame 300-3k level (-63.29 -> -68.41 and -59.54 -> -64.59)
 with the loud frames unchanged to 0.3 dB. At the full 0.1 it drove the pauses to digital silence,
 which is more than the material needs.
+It is validated end to end on a whole file, not just on slices: `Love Series 3B - Love of God`,
+447 s in one piece at chunk 5, ran 3.30x and its finished mp3 measures flat 0.0270 / corr +0.830 /
+drop 62.64 dB, against 0.0271 / +0.901 / 275.98 dB for the same file under the full-depth gate —
+the 275 dB and the higher corr are the clamped digital silence, not a better render: the reduced
+gate leaves the pause floor at -85 dB (-86.66 in 8-16 kHz) where the full one leaves exactly zero.
 
 Mixing the denoised copy into the *output* instead of the input measures worse, and the reason is
 worth keeping: the render is a fresh realization (sample-correlation 0.008-0.018 with its own
