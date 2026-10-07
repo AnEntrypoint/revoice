@@ -143,7 +143,11 @@ now matches upstream's to rms 1.6e-4, corr 0.999999, on identical cond and noise
 On 60 s of lecture audio the whole pipeline now lands on upstream (nfe 32 / upstream nfe 32):
 crest 15.32 / 15.31 dB, flatness 0.0205 / 0.0197, 8-16 kHz loud -19.50 / -18.58 dB and quiet
 -68.79 / -68.12 dB, 0-100 Hz loud -7.62 / -7.59 dB, corr(log 300-3k, log 8-16k) 0.811 / 0.819.
-The batch's nfe 16 is a hair milder (flatness 0.0217) and still 3.2x realtime. Two related port errors fixed at the same time: the Kaiser rolloff denominator (upstream is
+The batch's nfe 16 is a hair milder (flatness 0.0217) and still 3.2x realtime. Confirmed on a
+second lecture too (`Love Series 3B`, source flatness 0.0383): upstream nfe 32 renders 0.0282 and
+our nfe 16 0.0294, crest 15.19 / 15.16 dB, 8-16 kHz loud -24.8 / -25.0 dB, corr 0.787 / 0.736 — so
+flatness near 0.029 is that material, not a defect. Ours gates the pauses harder (300-3k quiet
+-73.4 vs -64.4 dB, 8-16k quiet -75.4 vs -68.6 dB), which is the nfe-16 direction already measured. Two related port errors fixed at the same time: the Kaiser rolloff denominator (upstream is
 `torch.kaiser_window(K, periodic=False)`, i.e. divide by `(K-1)/2`, not `K/2`) and the sinusoidal
 time-embedding grid (`linspace(0, 4, 64)` has step `4/63`, not `4/64`). The `filter` buffers *are*
 in the checkpoint (24 of them), so the Kaiser code itself is only a fallback.
