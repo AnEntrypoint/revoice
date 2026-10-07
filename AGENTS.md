@@ -282,7 +282,10 @@ There is no delay to compensate: measured three ways on three input/render pairs
 9.5 ms per frame, RMS-envelope lag, onset-flux lag), the render lines up with its own input to
 within one mel frame. The old 110-140 ms figure came from a noisy source, where removing the noise
 leaves the correlation weak and its peak a broad hump rather than a point — the same measurement on
-cleaner material peaks sharply at 0. Nothing of the source goes unrendered: output length equals
+cleaner material peaks sharply at 0. A 60 s slice cut out of a longer render at the wrong offset
+measured 116 ms late in all three of its 20 s sub-segments at score 0.77, and 0.0 ms at score 0.94
+once it was re-cut from the same window the source came from: a steady offset across sub-segments is
+a cut, not a delay, and only re-cutting tells the two apart. Nothing of the source goes unrendered: output length equals
 input length and the last frames carry signal.
 
 ## rnnoise prefilter
@@ -304,38 +307,48 @@ signal 10.8 dB, 9.8 dB of it in the speech band, where `bd` took 23 dB out of th
 the voice 1.4 dB down. The model path must stay relative: a `:` in a filter option value ends the
 option list, and MSYS mangles `/d/...` into `C:\Program Files\Git\...`.
 
-Level has to be put back. rnnoise removes noise and some voice with it — 0.4 dB on the cleaner
-slice, 1.3 dB on the noisier — and resound's output level follows its input, so the render would
+Level has to be put back. rnnoise removes noise and some voice with it — 0.55 dB on the cleaner
+slice, 1.23 dB on the noisier — and resound's output level follows its input, so the render would
 come out that much quieter for no reason. The script reads both `mean_volume`s with `volumedetect`
 (prints at `-v info`), clamps the gain so the peak stays under -1 dBFS and to ±12 dB, and applies it
-at the encode. With the level matched, on two 60 s lecture slices at nfe 16 / chunk 5:
+at the encode. Two 60 s lecture slices at nfe 16 / chunk 5, plain against prefiltered against the
+delivered chain (prefiltered, gated, level restored):
 
-| | flatness | pauses (300-3k quiet) | 16-22 kHz quiet | loud 0.3-1k / 1-3k / 3-6k / 8-16k |
-|---|---|---|---|---|
-| A plain | 0.0202 | -63.29 dB | -73.72 dB | +25.84 / +8.83 / -3.37 / -26.13 |
-| A prefiltered | 0.0203 | -62.41 dB | -73.70 dB | +25.81 / +9.21 / -3.66 / -25.53 |
-| B plain | 0.0270 | -59.59 dB | -71.54 dB | +26.46 / +17.20 / -1.84 / -16.08 |
-| B prefiltered | 0.0247 | -60.78 dB | -72.37 dB | +26.40 / +17.41 / -1.67 / -17.27 |
+| | flatness | corr | 300-3k loud | 300-3k quiet | 16-22 kHz quiet |
+|---|---|---|---|---|---|
+| A plain | 0.0202 | +0.749 | +20.26 | -63.29 | -73.72 |
+| A prefiltered | 0.0195 | +0.756 | +19.84 | -62.31 | -73.85 |
+| A delivered | 0.0195 | +0.791 | +19.97 | -68.41 | -77.66 |
+| B plain | 0.0228 | +0.829 | +21.82 | -59.54 | -71.43 |
+| B prefiltered | 0.0225 | +0.790 | +20.76 | -61.72 | -72.48 |
+| B delivered | 0.0225 | +0.813 | +21.79 | -64.59 | -73.75 |
 
-so the voice lands within 0.2-0.4 dB of the plain render in every speech band and what moves is the
-part that was noise: flatness on the noisier slice (0.0270 -> 0.0247) and the pause floor. Above
-8 kHz it costs ~1 dB, bandwidth the model was inventing anyway. End to end on a real 447.66 s
-lecture: prefilter 5 s, render 133.78 s (3.35x), encode 6 s, `OK wall_s=149`, and `qa.py` on the
-result reads flat=0.0271 corr=+0.901 (passes) against the source's 0.0355 / +0.193. Listening A/B
-for the four variants on both slices: `C:\D\Downloads\resound_ab_prefilter\`.
+So what rnnoise buys is 0.0003-0.0007 of flatness and 1-2 dB of pause floor, and the loud speech
+band moves 0.2-0.4 dB: resound re-synthesizes the whole waveform, so most of rnnoise's work is
+overwritten by it. If the result does not sound like rnnoise is in the chain, that is why — it is
+in, ahead of resound, and this is what survives. End to end on a real 447.66 s lecture: prefilter
+5 s, render 133.78 s (3.35x), encode 6 s, `OK wall_s=149`, and `qa.py` on the result reads
+flat=0.0271 corr=+0.901 (passes) against the source's 0.0355 / +0.193. Listening A/B for the four
+variants on both slices: `C:\D\Downloads\resound_ab_prefilter\`.
 
-The gate is last (`agate=threshold=0.00316:ratio=4:range=0.1:attack=20:release=200:detection=rms`)
-and on our own renders it is a no-op: the render's pauses already sit at -87 dBFS (20 ms frame RMS,
-p10), so a -50 dBFS threshold only zeroes what is inaudible and file RMS and loud frames are
-unchanged to the last digit. It is in the chain because it is what makes the *other* reading of the
-61.8 % listenable — see below.
+The gate is last (`agate=threshold=0.00316:ratio=4:range=0.415:attack=20:release=200:detection=rms`).
+`range` is the deepest cut it will make, 0.1 being -20 dB, and it runs at 38.2 % of that depth
+(-7.64 dB) — the same 61.8/38.2 split as the prefilter — so it tidies the pauses without touching
+the material: 5.0-5.1 dB off the quiet-frame 300-3k level (-63.29 -> -68.41 and -59.54 -> -64.59)
+with the loud frames unchanged to 0.3 dB. At the full 0.1 it drove the pauses to digital silence,
+which is more than the material needs.
 
 Mixing the denoised copy into the *output* instead of the input measures worse, and the reason is
 worth keeping: the render is a fresh realization (sample-correlation 0.008-0.018 with its own
-input), so a 61.8/38.2 mix of the two is a doubled voice, not a blend — they add incoherently
-(power sum, not amplitude sum), flatness climbs back to the source's (0.0328 / 0.0438 against
-0.0202 / 0.0270), 8-16 kHz drops 7 dB and the level 4-13 dB. Gating recovers its pauses (-33 dB to
--62/-76) but not the doubling.
+input), so a 61.8/38.2 mix of the two is a doubled voice, not a blend. It also has to be
+time-aligned first — rnnoise's output runs 448 samples (10.2 ms) behind its input, so the render
+needs `adelay=10.15` to meet it, and a mix assembled from material whose two sides were cut from
+different offsets reads as a slapback (one 60 s slice built that way showed the render 116 ms late
+against its own source in every 20 s sub-segment; re-cut from one window it is 0 ms, see Chunk
+seams). Aligned and level-matched it no longer echoes, but it still undoes the noise gate: the
+quiet-frame 300-3k level comes back to -25.37 / -14.23 against the delivered -68.41 / -64.59, and
+flatness to 0.0295 / 0.0334 against 0.0195 / 0.0225 — barely better than the source's 0.0312 /
+0.0387.
 
 Cost: `arnndn` does 378 s of audio in 6 s, and the batch logged `WAIT_prefilter s=5` on a 447 s
 lecture — roughly 3 % of a file's render.
