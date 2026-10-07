@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use resound_core::chunking::{merge_chunks, split_chunks, ChunkConfig};
+use resound_core::chunking::{ChunkConfig, ChunkMerger};
 use resound_core::denoiser::Denoiser;
 use resound_core::enhancer::Enhancer;
 use resound_core::resample::Resampler;
@@ -99,6 +99,10 @@ fn parse_args() -> Args {
         usage();
     }
 
+    if chunk_seconds <= overlap_seconds || chunk_seconds <= 0.0 || overlap_seconds < 0.0 {
+        usage();
+    }
+
     Args {
         command,
         inputs,
@@ -164,23 +168,109 @@ fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
     Ok((samples, spec.sample_rate))
 }
 
-fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+const CHUNKS_PER_BATCH: usize = 24;
+
+fn process_file(
+    args: &Args,
+    input: &Path,
+    device: &Device,
+    denoiser: Option<&Denoiser>,
+    enhancer: Option<&Enhancer>,
+) -> Result<(f64, PathBuf), String> {
+    let (raw, sample_rate) = read_wav_mono(input)?;
+    if raw.is_empty() {
+        return Err("empty audio".into());
+    }
+
+    let wav = if sample_rate as usize == TARGET_RATE {
+        raw
+    } else {
+        let resampled = Resampler::new(sample_rate as usize, TARGET_RATE).process(&raw);
+        drop(raw);
+        resampled
+    };
+
+    let wav_len = wav.len();
+    let cfg = ChunkConfig {
+        sample_rate: TARGET_RATE,
+        chunk_seconds: args.chunk_seconds,
+        overlap_seconds: args.overlap_seconds,
+    };
+    let chunk_len = cfg.chunk_len();
+    let hop_len = cfg.hop_len();
+    if chunk_len == 0 || hop_len == 0 {
+        return Err("chunk-seconds must be greater than overlap-seconds".into());
+    }
+
+    let out = out_path(input, &args.command, args.out_dir.as_deref());
     let mut writer = hound::WavWriter::create(
-        path,
+        &out,
         hound::WavSpec {
             channels: 1,
-            sample_rate,
+            sample_rate: TARGET_RATE as u32,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         },
     )
-    .map_err(|e| format!("{path:?}: {e}"))?;
-    for &s in samples {
+    .map_err(|e| format!("{out:?}: {e}"))?;
+    let mut sink = |s: f32| -> Result<(), String> {
         writer
             .write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .map_err(|e| format!("{path:?}: {e}"))?;
+            .map_err(|e| format!("{out:?}: {e}"))
+    };
+
+    let mut merger = ChunkMerger::new(&cfg, wav_len);
+    let mut batch: Vec<Vec<f32>> = Vec::with_capacity(CHUNKS_PER_BATCH);
+    let mut lengths: Vec<usize> = Vec::with_capacity(CHUNKS_PER_BATCH);
+    let mut start = 0usize;
+
+    loop {
+        let end = (start + chunk_len).min(wav_len);
+        batch.push(wav[start..end].to_vec());
+        lengths.push(end - start);
+        let last = end == wav_len;
+
+        if last || batch.len() >= CHUNKS_PER_BATCH {
+            let outputs = if args.command == "denoise" {
+                let denoiser = denoiser.ok_or_else(|| "denoiser unavailable".to_string())?;
+                batch
+                    .iter()
+                    .map(|c| denoiser.forward(c, device).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, String>>()?
+            } else {
+                let enhancer = enhancer.ok_or_else(|| "enhancer unavailable".to_string())?;
+                let started = std::time::Instant::now();
+                let outs = enhancer
+                    .forward_many(&batch, args.nfe, args.tau, device)
+                    .map_err(|e| e.to_string())?;
+                if std::env::var("RESOUND_PROFILE").is_ok() {
+                    eprintln!(
+                        "solve_group_chunks={} elapsed_ms={}",
+                        outs.len(),
+                        started.elapsed().as_millis()
+                    );
+                }
+                outs
+            };
+
+            for (mut chunk_out, len) in outputs.into_iter().zip(lengths.drain(..)) {
+                chunk_out.truncate(len);
+                merger.push(&chunk_out, &mut sink)?;
+            }
+            batch.clear();
+        }
+
+        if last {
+            break;
+        }
+        start += hop_len;
     }
-    writer.finalize().map_err(|e| format!("{path:?}: {e}"))
+
+    merger.finish(&mut sink)?;
+    writer.finalize().map_err(|e| format!("{out:?}: {e}"))?;
+    drop(wav);
+
+    Ok((wav_len as f64 / TARGET_RATE as f64, out))
 }
 
 fn out_path(input: &Path, command: &str, out_dir: Option<&Path>) -> PathBuf {
@@ -289,66 +379,3 @@ fn main() {
     );
 }
 
-fn process_file(
-    args: &Args,
-    input: &Path,
-    device: &Device,
-    denoiser: Option<&Denoiser>,
-    enhancer: Option<&Enhancer>,
-) -> Result<(f64, PathBuf), String> {
-    let (raw, sample_rate) = read_wav_mono(input)?;
-    if raw.is_empty() {
-        return Err("empty audio".into());
-    }
-
-    let wav = if sample_rate as usize == TARGET_RATE {
-        raw
-    } else {
-        Resampler::new(sample_rate as usize, TARGET_RATE).process(&raw)
-    };
-
-    let wav_len = wav.len();
-    let cfg = ChunkConfig {
-        sample_rate: TARGET_RATE,
-        chunk_seconds: args.chunk_seconds,
-        overlap_seconds: args.overlap_seconds,
-    };
-    let chunks = split_chunks(&wav, &cfg);
-    drop(wav);
-    let chunk_count = chunks.len();
-
-    let lengths: Vec<usize> = chunks.iter().map(|(_, c)| c.len()).collect();
-    let mut outputs: Vec<Vec<f32>> = Vec::with_capacity(chunk_count);
-    if args.command == "denoise" {
-        let denoiser = denoiser.ok_or_else(|| "denoiser unavailable".to_string())?;
-        for ((_, chunk), len) in chunks.iter().zip(&lengths) {
-            let mut out = denoiser.forward(chunk, device).map_err(|e| e.to_string())?;
-            out.truncate(*len);
-            outputs.push(out);
-        }
-    } else {
-        let enhancer = enhancer.ok_or_else(|| "enhancer unavailable".to_string())?;
-        let waves: Vec<Vec<f32>> = chunks.into_iter().map(|(_, c)| c).collect();
-        let started = std::time::Instant::now();
-        let mut enhanced = enhancer
-            .forward_many(&waves, args.nfe, args.tau, device)
-            .map_err(|e| e.to_string())?;
-        if std::env::var("RESOUND_PROFILE").is_ok() {
-            eprintln!(
-                "solve_group_chunks={} elapsed_ms={}",
-                enhanced.len(),
-                started.elapsed().as_millis()
-            );
-        }
-        for (out, len) in enhanced.iter_mut().zip(&lengths) {
-            out.truncate(*len);
-        }
-        outputs = enhanced;
-    }
-
-    let merged = merge_chunks(&outputs, cfg.overlap_len(), wav_len);
-    let out = out_path(input, &args.command, args.out_dir.as_deref());
-    write_wav(&out, &merged, TARGET_RATE as u32)?;
-
-    Ok((wav_len as f64 / TARGET_RATE as f64, out))
-}
