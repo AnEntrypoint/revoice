@@ -190,15 +190,15 @@ that bit once and are now guarded:
   temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
 - A silent resound death is VRAM or a driver reset: the script waits for the card under 85 C and
   under 1.5 GB used before each piece — capped at 12 polls x 20 s, so never more than 4 min — then
-  retries twice at chunk 3. The cost is real: 5 of the first 6 files died once. The deaths are
-  silent — rc=127, no stderr from candle, no Windows application or `nvlddmkm` event — and land
-  mid-piece (6/24, 12/14 chunks) with the card otherwise at 0 % and host RAM at 7 GB free. Killing
-  Chrome does not cause them (a chunk-5 run survived four `chrome.exe` GPU kills in 40 s), and
-  chunk 5 peaks around 3 GB against a ~3.3 GB room once another client is on the card: a chunk-5
-  run beside a chunk-3 one measured 5234 MiB and the chunk-3 process died as the other released.
-  Working reading: a transient second CUDA client inside the peak, with the window set by how often
-  the watcher polls — `gpuwatch.sh` and `gpuwatch_guard.sh` both poll (10 s and 3 s) rather than
-  block, so a client can hold the card for up to that long.
+  retries twice at chunk 3. They are the GPU falling over, not contention: every one pairs with an
+  nvlddmkm Event ID 153, "Error occurred on GPUID: 100", in the System log (12 in 3 h; 09:10:13
+  second-exact with a death timed from the log). Query it by `ProviderName`, not `Message` — the
+  message is null there, so a message-match filter finds nothing. `TdrDelay` and `TdrLevel` are
+  unset, so WDDM's 2 s default applies; raising them needs admin and a reboot. Chrome is not the
+  cause: killing its gpu-process at creation (see `gpuwatch_event.ps1`) did not stop them.
+  Chunk 3 costs no speed against chunk 5 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free) and
+  every chunk-3 retry has completed, so it is the candidate first attempt next run — but it
+  duplicates 17 % of the audio instead of 11 % and puts more chunks through a piece.
   The temperature gate used to be 78 C, which bought minutes of idle per piece for nothing — at
   83 C and 1267 MHz a 539 s file still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
   every chunk is thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min
