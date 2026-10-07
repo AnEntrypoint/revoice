@@ -40,15 +40,12 @@ and 0.33x in the same hour.
 
 The machine is in use: **never kill Chrome.** `gpuwatch.sh`, `gpuwatch_guard.sh` and
 `gpuwatch_event.ps1` all killed its `--type=gpu-process` on a timer; that is off now, and the batch
-just shares the card. Sharing decides the chunk size instead: Chrome holds ~2.2 GB and the driver
-kills us past ~5.5 GB (exit 127, no message), so chunk 3 (~2.3 GB) fits beside it and chunk 5
-(~3.2 GB) does not — which is why every chunk-3 retry completed while chunk-5 runs died about once
-per file. `nvidia-smi -pl` and `-c` both answer Insufficient Permissions here, so the power cap and
-exclusive compute mode are not available; the card runs
+just shares the card. Sharing sets the chunk size instead: the other client holds ~2.2 GB and
+chunk 5 needs ~3.2 GB, so chunk 5 only fits when the card is otherwise free, and the batch asks
+`nvidia-smi` per file (see Batch). `nvidia-smi -pl` and `-c` both answer Insufficient Permissions
+here, so the power cap and exclusive compute mode are not available; the card runs
 82-83 C at ~60 W with clocks pinned 1267/2100 MHz (SW Thermal Slowdown) and still delivers ~2.5x,
-so heat is not worth waiting on, contention is. VRAM headroom decides the chunk size: chunk 5
-needs ~3.6 GB, so it fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills
-the process. Prefer ratios inside one run over absolute ms.
+so heat is not worth waiting on, contention is. Prefer ratios inside one run over absolute ms.
 
 Time A/B/A, never A/B: baseline, candidate, baseline again, with the same fixed rest between runs
 (`testsound/lectures/ab*.sh` use 15-20 s). Drift then reads as a gap between the two baselines
@@ -167,18 +164,23 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
 `C:\D\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
-Config: `GEMM=tf32 NFE=16 CHUNK=3 RETRY_CHUNK=2 OVERLAP=0.5 MAXPIECE=450` — chunk 3, not 5,
-because the card is shared with Chrome (see above): chunk 5 is ~3.2 GB and Chrome holds ~2.2 GB,
-past the ~5.5 GB the driver tolerates. Chunk 3 measured the same speed as chunk 5
-(A/B/A/B on 60 s: 54/52 s contended, 18/17 s free), it just duplicates 17 % of the audio instead of
-11 %. A piece measures 2.7-2.9x and a whole file lands at 1.9-2.4x inclusive, the gap being deaths
-and the waits around them; 933 s of audio took 486 s with one death in it. So ~9 days rather than
-~6 for the 447.8 h, plus ~20 h of decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290
-taken from a batch mp3 and 0.0294 from a wav render of the same source.
+Config: `GEMM=tf32 NFE=16 OVERLAP=0.5`, with chunk and piece length picked per file by
+`pick_chunk()`. Chunk 5 (~3.2 GB) only fits when the card is otherwise free, so the script asks
+`nvidia-smi` for free memory and takes chunk 5 with 450 s pieces above `CHUNK_FREE_MIB=4000`,
+else chunk 3 with 250 s pieces and chunk 2 as the retry. It is worth taking when it fits: in a
+45 min window chunk 5 rendered ~4000 s of audio in 340/349/401/405 s (2.67x) against chunk 3's
+baseline of 390/486/519 s for ~2755 s (1.97x), and it duplicates 11 % of the audio instead of 20 %.
+Deaths scale with process starts as well as time under load — 225 s pieces lost 11.5 per
+audio-hour, chunk 3 at 450 s 6.5, chunk 5 at 450 s 4.5 — which is why the 225 s experiment was
+reverted. So ~7 days of enhancing for the 447.8 h rather than ~9, plus ~20 h of decode/encode.
+The 192 kbps mp3 encode is transparent: the same
+60 s slice measures flatness 0.0290 taken from a batch mp3 and 0.0294 from a wav render of the same
+source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
-join and encode end to end in minutes. Every file is cut into equal 450 s pieces (0.5 s overlap)
-and rejoined with `join.py`, which streams and keeps only the overlap tail. Output lands in
+join and encode end to end in minutes. Every file is cut into equal pieces (0.5 s overlap; 450 s at
+chunk 5, 250 s at chunk 3) and rejoined with `join.py`, which streams and keeps only the overlap
+tail. Output lands in
 `C:\D\Downloads\Manly_P.Hall_Enhanced` — a `C:` path, like the source; `D:\temp_resound` is only
 scratch.
 
@@ -194,7 +196,10 @@ that bit once and are now guarded:
 - An empty `ffprobe` duration silently collapses the plan to one piece, which on a long file means
   one 1.2 GB enhance; the plan is validated and the file is skipped with `FAIL_PLAN`.
 - Stopping a background task kills the wrapper, not the script, and two live instances share one
-  temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
+  temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock. Never
+  edit `run_batch.sh` while a run is live: bash holds a byte offset into the script, so a rewrite
+  of a different length gets re-read from the wrong place. Stop the whole `bash.exe` tree (not just
+  the wrapper), `rm -rf $TMP/.lock`, edit, restart.
 - A silent resound death is the GPU falling over, not contention: rc=127, no message, and an
   nvlddmkm Event ID 153 ("Error occurred on GPUID: 100") beside it in the System log (12 in 3 h;
   09:10:13 second-exact with a death timed from the log). Query it by `ProviderName`, not
