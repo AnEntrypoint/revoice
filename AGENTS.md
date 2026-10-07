@@ -190,9 +190,13 @@ that bit once and are now guarded:
   temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
 - A silent resound death is VRAM or a driver reset: the script waits for the card under 85 C and
   under 1.5 GB used before each piece — capped at 12 polls x 20 s, so never more than 4 min — then
-retries twice at chunk 3. The temperature gate used to
-  be 78 C, which bought minutes of idle per piece for nothing — at 83 C and 1267 MHz a 539 s file
-  still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
+  retries twice at chunk 3. Deaths cluster at piece 0/1, not later in the file: `gpuwatch.sh` only
+  kills while `resound.exe` is alive, so the card goes unprotected through the decode/encode
+  between files and Chrome takes a context in that window, which the next fresh `resound.exe` hits
+  on its first big allocation. `gpuwatch_guard.sh` is the same loop without that gate — start it
+  detached with `start_guard.bat` and it runs for the whole batch.
+  The temperature gate used to be 78 C, which bought minutes of idle per piece for nothing — at
+  83 C and 1267 MHz a 539 s file still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
   every chunk is thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min
   piece dies past ~100 chunks, while the same audio in 450 s pieces does not.
 - A run that prints `device=Cpu` has lost CUDA and is ~1000x slower while looking perfectly
