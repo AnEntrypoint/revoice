@@ -37,13 +37,13 @@ load let it cool ~75 s first. Sharing costs ~10x, not 3x: the same 60 s clip at 
 17.8 s alone and 183.9 s with one headless Chrome context beside it, and nfe 32 measured 2.72x
 and 0.33x in the same hour.
 
-Every Chrome on this box is headless gm automation (no window: check `MainWindowTitle`), and a new
-one comes back within minutes of being killed, so one kill per piece is not enough —
-`testsound/lectures/gpuwatch.sh` kills every non-resound CUDA client every 10 s while
-`resound.exe` is alive. It kills Chrome's `--type=gpu-process` and not the browser, because Chrome
-counts those as GPU crashes and drops to software compositing after a few — the one state in which
-it stops asking for the card at all. `nvidia-smi -pl` and `-c` both answer Insufficient
-Permissions here, so the power cap and exclusive compute mode are not available; the card runs
+The machine is in use: **never kill Chrome.** `gpuwatch.sh`, `gpuwatch_guard.sh` and
+`gpuwatch_event.ps1` all killed its `--type=gpu-process` on a timer; that is off now, and the batch
+just shares the card. Sharing decides the chunk size instead: Chrome holds ~2.2 GB and the driver
+kills us past ~5.5 GB (exit 127, no message), so chunk 3 (~2.3 GB) fits beside it and chunk 5
+(~3.2 GB) does not — which is why every chunk-3 retry completed while chunk-5 runs died about once
+per file. `nvidia-smi -pl` and `-c` both answer Insufficient Permissions here, so the power cap and
+exclusive compute mode are not available; the card runs
 82-83 C at ~60 W with clocks pinned 1267/2100 MHz (SW Thermal Slowdown) and still delivers ~2.5x,
 so heat is not worth waiting on, contention is. VRAM headroom decides the chunk size: chunk 5
 needs ~3.6 GB, so it fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills
@@ -164,9 +164,10 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
 `D:\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
-Config: `GEMM=tf32 NFE=16 CHUNK=5 OVERLAP=0.5`, about 3.2x realtime on a free card, so ~6 days
-plus ~20 h of decode/encode. Run it behind `gpuwatch.sh` (see above) or contention takes it to
-0.33x. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290 taken
+Config: `GEMM=tf32 NFE=16 CHUNK=3 OVERLAP=0.5` — chunk 3, not 5, because the card is shared with
+Chrome (see above) and chunk 5 gets reclaimed mid-piece. Chunk 3 measured the same speed as chunk 5
+(A/B/A/B on 60 s: 54/52 s contended, 18/17 s free), it just duplicates 17 % of the audio instead of
+11 %. About 3.2x realtime on a free card when nothing dies, so ~6 days plus ~20 h of decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290 taken
 from a batch mp3 and 0.0294 from a wav render of the same source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
@@ -194,8 +195,14 @@ that bit once and are now guarded:
   nvlddmkm Event ID 153, "Error occurred on GPUID: 100", in the System log (12 in 3 h; 09:10:13
   second-exact with a death timed from the log). Query it by `ProviderName`, not `Message` — the
   message is null there, so a message-match filter finds nothing. `TdrDelay` and `TdrLevel` are
-  in the run: `settle()` waits for two minutes with no new nvlddmkm event before retrying (then
-  `cool()`), which is what recovered the file straight after it was lost.
+  unset, so WDDM's 2 s default applies and raising them would need admin and a reboot. Chrome is
+  not the cause: killing its gpu-process at creation (`gpuwatch_event.ps1`, 40 kills) did not stop
+  them. What they do is arrive in bursts — six in four minutes once — so `settle()` waits for two
+  minutes with no new nvlddmkm event before a retry, and now before every piece too (it costs one
+  event query on a healthy card). Waiting does not prevent a death that starts mid-piece; it is
+  about one per file either way. What it prevents is the *retry* landing inside the burst, which is
+  the state that loses the file rather than the piece: `Love Series 1B - Human Love` was lost to
+  exactly that and recovered on the next run.
   Chunk 3 costs no speed against chunk 5 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free) and
   every chunk-3 retry has completed, so it is the candidate first attempt next run — but it
   duplicates 17 % of the audio instead of 11 % and puts more chunks through a piece.
