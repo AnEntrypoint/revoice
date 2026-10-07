@@ -237,6 +237,11 @@ guarded:
   to delete — one death threw away 205 s of rendered audio that way. `salvage_resume` joins it onto
   the piece before retrying, so up to three attempts accumulate progress and only the last resort
   re-renders the whole piece at chunk 2.
+  `resume.enhance.wav` is cleared at the start of every *piece*, not just of every resume: a
+  successful resume leaves it behind, and the next piece to die would have the previous piece's
+  remainder crossfaded onto it — piece 0's 322 s was offered to piece 1 exactly that way, and only
+  the half-written wav being unreadable by Python's `wave` stopped it. Clearing per piece keeps
+  salvage for what it is for: accumulating attempts on one piece.
   Waiting used to make a death expensive and was unconditional: `settle()` waited for two quiet
   minutes in the event log before every piece. `ready()` asks the card instead — one 1 s render at
   nfe 8 over `probe1s.wav`, ~4 s — and settles only when that fails, so a healthy card costs 4 s a
