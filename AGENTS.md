@@ -21,6 +21,8 @@ continues.
 | `RESOUND_SOLVE_FRAMES` | mel frames per CFM solver call (default 1680) |
 | `RESOUND_PROFILE` | `1` stage ms, `2` +gpu tick, `3` +per-layer tick |
 | `RESOUND_WARMUP_MB` | preallocate this much VRAM before starting (default 0) |
+| `RESOUND_DUMP_MEL` | write the conditioning mel and the decoded 160 ch to this dir as `.f32` |
+| `RESOUND_COND_FILE` | skip mel/AE/CFM and vocode this `1x160xT` little-endian f32 instead |
 
 ## Measuring anything on this GPU
 
@@ -117,11 +119,22 @@ mel our vocoder still produced flatness 0.1927, so the whole mel->IRMAE->CFM->de
 (our cond statistics match upstream's to 3 digits: std 1.244 vs 1.250, jitter 0.3217 vs 0.3215,
 cos(cond128, mel) 0.5564 vs 0.5575) and the vocoder was not.
 
-The bug was `UpSample1d` in `aliasfree.rs`: it scaled the Kaiser filter by `ratio²` where upstream
-(`univnet/alias_free_torch/resample.py`) applies `ratio` once, as a gain on the transposed-conv
-output. Every AMP branch in every LVC block therefore ran 2x too hot, and `SnakeBeta` is nonlinear
-so it did not cancel. With the fix the same upstream cond renders 0.0180 flatness vs upstream's own
-0.0211. Two related port errors fixed at the same time: the Kaiser rolloff denominator (upstream is
+Two vocoder bugs were behind it, both invisible structurally:
+
+1. `UpSample1d` scaled its Kaiser filter by `ratio²` where upstream (`univnet/alias_free_torch/
+resample.py`) applies `ratio` once, as a gain on the transposed-conv output. Every AMP branch in
+every LVC block therefore ran 2x too hot, and `SnakeBeta` is nonlinear so it did not cancel.
+2. `KernelPredictor`'s trunk used LeakyReLU slope 0.1. Upstream's `KernelPredictor` defaults to
+0.1, but `LVCBlock` overrides it with `lReLU_slope=0.2`, so 0.2 is what actually runs. This one
+was the whole of the residual gap: same cond, before/after/upstream 8-16 kHz loud -32.4 / -24.7 /
+-24.7 dB, quiet -58.6 / -72.7 / -72.1 dB, 16-22 kHz flatness 0.151 / 0.088 / 0.088. Our vocoder
+now matches upstream's to rms 1.6e-4, corr 0.999999, on identical cond and noise. `conv_pre` and
+`conv_post` also had to become reflect-padded (upstream `padding_mode="reflect"`).
+
+On 60 s of lecture audio the whole pipeline now lands on upstream (nfe 32 / upstream nfe 32):
+crest 15.32 / 15.31 dB, flatness 0.0205 / 0.0197, 8-16 kHz loud -19.50 / -18.58 dB and quiet
+-68.79 / -68.12 dB, 0-100 Hz loud -7.62 / -7.59 dB, corr(log 300-3k, log 8-16k) 0.811 / 0.819.
+The batch's nfe 16 is a hair milder (flatness 0.0217) and still 3.2x realtime. Two related port errors fixed at the same time: the Kaiser rolloff denominator (upstream is
 `torch.kaiser_window(K, periodic=False)`, i.e. divide by `(K-1)/2`, not `K/2`) and the sinusoidal
 time-embedding grid (`linspace(0, 4, 64)` has step `4/63`, not `4/64`). The `filter` buffers *are*
 in the checkpoint (24 of them), so the Kaiser code itself is only a fallback.
@@ -225,3 +238,6 @@ strides [7,5,4,3], dilations [1,3,9,27].
   `frames * layers * 2 * hidden` floats (1680 frames ≈ 210 MB).
 - `WaveNet::stacked_local_conditioning` is constant across the whole ODE, so the solver builds it
   once instead of once per step.
+- `KernelPredictor`'s trunk slope is 0.2, not the 0.1 in `KernelPredictor.__init__`: `LVCBlock`
+  passes `kpnet_nonlinear_activation_params={"negative_slope": lReLU_slope}` and overrides the
+  default. Getting this wrong costs 8 dB of HF and 13 dB of noise floor, not an error.

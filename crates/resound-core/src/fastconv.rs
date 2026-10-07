@@ -13,6 +13,28 @@ fn phase(j: usize, padding: usize, stride: usize) -> (isize, usize) {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PadMode {
+    Zeros,
+    Reflect,
+}
+
+fn pad_reflect1d(x: &Tensor, padding: usize) -> Result<Tensor> {
+    let len = x.dim(1)?;
+    if padding == 0 || len < 2 {
+        return x.pad_with_zeros(1, padding, padding);
+    }
+    let mut parts = Vec::with_capacity(2 * padding + 1);
+    for i in 0..padding {
+        parts.push(x.narrow(1, (padding - i).min(len - 1), 1)?);
+    }
+    parts.push(x.clone());
+    for i in 0..padding {
+        parts.push(x.narrow(1, (len - 2).saturating_sub(i), 1)?);
+    }
+    Tensor::cat(&parts, 1)
+}
+
 pub struct FastConv1d {
     weight: Tensor,
     bias: Option<Tensor>,
@@ -21,6 +43,7 @@ pub struct FastConv1d {
     c_in: usize,
     dilation: usize,
     padding: usize,
+    pad_mode: PadMode,
 }
 
 impl FastConv1d {
@@ -30,6 +53,7 @@ impl FastConv1d {
         ksize: usize,
         dilation: usize,
         padding: usize,
+        pad_mode: PadMode,
     ) -> Result<Self> {
         let weight = if weight.is_contiguous() {
             weight
@@ -52,10 +76,15 @@ impl FastConv1d {
             c_in,
             dilation,
             padding,
+            pad_mode,
         })
     }
 
     pub fn from_conv1d(conv: &Conv1d) -> Result<Self> {
+        Self::with_pad_mode(conv, PadMode::Zeros)
+    }
+
+    pub fn with_pad_mode(conv: &Conv1d, pad_mode: PadMode) -> Result<Self> {
         let cfg = conv.config();
         if cfg.groups != 1 || cfg.stride != 1 {
             candle_core::bail!(
@@ -70,6 +99,7 @@ impl FastConv1d {
             conv.weight().dims3()?.2,
             cfg.dilation,
             cfg.padding,
+            pad_mode,
         )
     }
 
@@ -112,6 +142,7 @@ impl FastConv1d {
             c_in: first.c_in,
             dilation: 1,
             padding: 0,
+            pad_mode: PadMode::Zeros,
         })
     }
 
@@ -187,7 +218,10 @@ impl FastConv1d {
     fn padded(&self, x: &Tensor, len: usize) -> Result<(Tensor, usize)> {
         let src = x.squeeze(0)?;
         let src = if self.padding > 0 {
-            src.pad_with_zeros(1, self.padding, self.padding)?
+            match self.pad_mode {
+                PadMode::Reflect => pad_reflect1d(&src, self.padding)?,
+                PadMode::Zeros => src.pad_with_zeros(1, self.padding, self.padding)?,
+            }
         } else {
             src
         };

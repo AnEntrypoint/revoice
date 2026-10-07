@@ -1,8 +1,10 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, DType, Result, Tensor};
 use candle_nn::{conv1d, conv_transpose1d, Conv1dConfig, ConvTranspose1dConfig, VarBuilder};
 
 use crate::aliasfree::AmpBlock;
-use crate::fastconv::{FastConv1d, FastConvTranspose1d};
+use crate::fastconv::{FastConv1d, FastConvTranspose1d, PadMode};
+
+const KP_SLOPE: f64 = 0.2;
 
 fn leaky_relu(x: &Tensor, negative_slope: f64) -> Result<Tensor> {
     x.maximum(&(x * negative_slope)?)
@@ -72,6 +74,7 @@ impl KernelPredictor {
                 3,
                 1,
                 1,
+                PadMode::Zeros,
             )?);
             bias_convs.push(FastConv1d::new(
                 bias_conv.weight().narrow(0, l * conv_out, conv_out)?,
@@ -79,6 +82,7 @@ impl KernelPredictor {
                 3,
                 1,
                 1,
+                PadMode::Zeros,
             )?);
         }
 
@@ -94,10 +98,11 @@ impl KernelPredictor {
     }
 
     fn trunk(&self, cond: &Tensor) -> Result<Tensor> {
-        let mut h = leaky_relu(&self.input_conv.forward(cond)?, 0.1)?;
-        for (c1, c2) in &self.res_convs {
-            let y = leaky_relu(&c1.forward(&h)?, 0.1)?;
-            let y = leaky_relu(&c2.forward(&y)?, 0.1)?;
+        let raw = self.input_conv.forward(cond)?;
+        let mut h = leaky_relu(&raw, KP_SLOPE)?;
+        for (c1, c2) in self.res_convs.iter() {
+            let y = leaky_relu(&c1.forward(&h)?, KP_SLOPE)?;
+            let y = leaky_relu(&c2.forward(&y)?, KP_SLOPE)?;
             h = (&h + y)?;
         }
         Ok(h)
@@ -328,9 +333,9 @@ impl UnivNet {
         let conv_post = conv1d(channels, 1, 7, cfg7, vb.pp("conv_post").pp("1"))?;
 
         Ok(Self {
-            conv_pre: FastConv1d::from_conv1d(&conv_pre)?,
+            conv_pre: FastConv1d::with_pad_mode(&conv_pre, PadMode::Reflect)?,
             blocks,
-            conv_post: FastConv1d::from_conv1d(&conv_post)?,
+            conv_post: FastConv1d::with_pad_mode(&conv_post, PadMode::Reflect)?,
         })
     }
 
