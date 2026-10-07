@@ -164,7 +164,7 @@ the batch's nfe 16 is a hair milder (0.0217) and still 3.2x.
 192 kbps mono mp3 (~39 GB vs 89 GB flac / 142 GB wav); `D:\temp_resound` is scratch; on D: because C:
 sits at 99 % with ~36 GB free.
 
-**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 37 files delivered.**
+**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 40 files delivered.**
 A stop costs only the in-flight piece. `bash testsound/lectures/status.sh [N]` answers the whole
 "is it alive / what is in flight / did it land / how fast" set in one read-only pass (it parses `OUT`
 and `TMP` out of `run_batch.sh`, never from the environment — Windows exports `TMP` to an unrelated
@@ -269,6 +269,11 @@ minutes) — so prevent nothing, just make it cheap.
   to delete — one death threw away 205 s that way. `salvage_resume` joins it onto the piece before
   retrying, so up to three attempts accumulate progress and only the last resort re-renders the whole
   piece at chunk 2.
+- Resume only pays when a piece already has more than the crossfade window rendered. With an empty
+  piece there is nothing to join onto, so three resume attempts burn the whole ladder and reach the
+  last resort having gained nothing — `Philosophy and Religion 14B` ran exactly that way,
+  `RETRY_AT_CHUNK2` at attempt=3 and again at attempt=1 on consecutive pieces. Spend the attempts on
+  full re-renders instead.
 - `resume.enhance.wav` is cleared at the start of every *piece*, not just of every resume: a
   successful resume leaves it behind, and the next piece to die would have the previous piece's
   remainder crossfaded onto it — piece 0's 322 s was offered to piece 1 exactly that way, and only the
