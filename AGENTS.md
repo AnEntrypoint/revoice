@@ -157,8 +157,12 @@ the batch's nfe 16 is a hair milder (0.0217) and still 3.2x.
 192 kbps mono mp3 (~39 GB vs 89 GB flac / 142 GB wav); `D:\temp_resound` is scratch; on D: because C:
 sits at 99 % with ~36 GB free.
 
-**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 35 files delivered.**
-A stop costs only the in-flight piece.
+**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 36 files delivered.**
+A stop costs only the in-flight piece. `bash testsound/lectures/status.sh [N]` answers the whole
+"is it alive / what is in flight / did it land / how fast" set in one read-only pass (it parses `OUT`
+and `TMP` out of `run_batch.sh`, never from the environment — Windows exports `TMP` to an unrelated
+directory). It flags the failure that is otherwise invisible: a joined render sitting in `$TMP/enc.wav`
+with no `.part` in the output dir, which is how the `OUT` bug presented.
 
 Per file: decode to 44.1 kHz mono, rnnoise prefilter, enhance, encode to `$dest.part`, rename; a
 non-empty output means done, so the run is resumable. Shortest first (`durations.tsv`). Equal pieces
@@ -186,9 +190,13 @@ Gotchas, each of which has bitten:
 - **Apostrophes in paths**: MSYS will not convert a `/c/...` path to Windows form for a native exe when
   the path contains `'`, so ffmpeg answers "No such file or directory" for a file `ls` plainly sees.
   18 of 588 names have one (`Esoteric, Metaphysical 18B - Pandora's Box - the Mystery of Memory`).
-  Fixed: `SRC` is now the Windows form `C:/D/Downloads/Manly_P.Hall_Digitally_Restored_Audio_Lectures`,
-  which its three uses (`FILES`, `[ -f "$f" ]`, `ff -i "$f"`) all take. Commas and ampersands are fine;
-  only `'` breaks it.
+  Commas and ampersands are fine; only `'` breaks it. Both sides hit it and both are now Windows form:
+  `SRC="C:/D/Downloads/..."` (its three uses — `FILES`, `[ -f "$f" ]`, `ff -i "$f"` — all take it) and
+  `OUT="D:/Manly_P.Hall_Enhanced"`. Verified directly by encoding a throwaway `.part` with `'` in its
+  name into the output dir: `/d/Manly_P.Hall_Enhanced/...` fails rc=127 "No such file or directory",
+  `D:/Manly_P.Hall_Enhanced/...` writes — the same error `OUT` had logged under `why:`. The output side
+  is the expensive one: the decode fails before any GPU work, but `OUT` fails *after* the whole file is
+  rendered (18B rendered 1600 s and lost it), and it would have hit all 18 names (~2.5 h of GPU).
 - An empty `ffprobe` duration collapses the plan to one piece (one 1.2 GB enhance), so the plan is
   validated and the file skipped with `FAIL_PLAN`.
 - **Never edit `run_batch.sh` while a run is live**: bash holds a byte offset into the script, so a
