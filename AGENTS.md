@@ -57,9 +57,13 @@ instead of as a speedup.
 chunk 10 ≈ 4.1 GB, chunk 15 ≈ 5.3 GB, chunk 20 OOMs. Past ~5.5 GB the driver kills the process
 (exit 127, no message) or candle returns `CUDA_ERROR_OUT_OF_MEMORY`. Defaults are 5 s / 0.5 s
 overlap: processed_seconds = audio_seconds * chunk / (chunk - overlap), so overlap is duplicated
-work and 0.5 s keeps it at 11 %. It no longer has to clear a 2048-sample search window — that was
-the cross-correlation seam aligner, which is gone — only to be long enough to crossfade, and the
-only offset it has to absorb is the model's constant ~120 ms of delay.
+work. The batch runs 0.25 s, which duplicates 5 % of the audio instead of 11 % and is measurably
+faster: 180 s of lecture at chunk 5 took 53.3 s at 0.25 s against 55.7 s at 0.5 s, A/B/A/B on an
+idle card, with flatness 0.0133 vs 0.0127 and no seam delta above the file's global max. The
+window no longer has to clear a 2048-sample search window — that was the cross-correlation seam
+aligner, which is gone — only to be long enough to crossfade, and the only offset it has to absorb
+is the model's constant ~120 ms of delay, which is why 0.25 s and not 0.15 s: below that the
+margin over the delay is down to 30 ms.
 
 Host RAM, not VRAM, is the other limit on long files. `process_file` now streams: it drops the
 source buffer right after resampling, cuts each 5 s window straight out of the resampled buffer,
@@ -71,10 +75,15 @@ resampled + every chunk output + the merged buffer was ~2 GB and got a 58 min ru
 ## Where the time goes (15 s clip, chunk 5)
 
 CFM solver ~62 %, vocoder ~38 %, mel well under 1 %. Total ≈ 1.6x realtime when the card is
-cool, ~0.5x when it is hot (see above). Solver cost is ~0.8 s fixed plus ~2.9 ms per mel frame,
+cool, ~0.5x when it is hot (see above); on an otherwise idle card a single 180 s file at chunk 5,
+nfe 16, tf32 measures 3.2-3.4x, which is the ceiling the batch is measured against. Solver cost is ~0.8 s fixed plus ~2.9 ms per mel frame,
 so one call covering several chunks amortises the fixed part: grouping 3 chunks per call beat
 per-chunk solves 9.8 s vs 13.3 s on 15 s of audio. A batch of 3 files (88.8 s of audio) ran at
-1.43x.
+1.43x. Two knobs that looked like levers and are not: f16 for the CFM alone (`RESOUND_GEMM=tf32`
+with every CFM conv cast to f16) measured 50.7 s against 46.9 s for plain tf32 on 180 s at chunk 5
+— the ~30 % that f16 wins over f32 does not survive tf32 already being on — and
+`RESOUND_SOLVE_FRAMES=3360` against 1680 was 52.8 s vs 53.1 s, i.e. the ~0.8 s per solver call is
+already amortised at three chunks per call.
 
 nfe is the one knob that buys real time. On a 60 s clip with the card free, tf32 gave nfe 64
 1.67x, nfe 32 2.72x, nfe 24 2.98x, nfe 16 3.17-3.37x (nfe 8 was not faster than 16). Quality,
@@ -164,8 +173,9 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
 `C:\D\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
-Config: `GEMM=tf32 NFE=16 OVERLAP=0.5`, with chunk and piece length picked per file by
-`pick_chunk()`. Chunk 5 (~3.2 GB) only fits when the card is otherwise free, so the script asks
+Config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, with chunk and piece length picked per file by
+`pick_chunk()`. Overlap is 0.25 s because it is 5 % duplicated audio instead of 11 % and measures
+4.5 % faster (see Memory). Chunk 5 (~3.2 GB) only fits when the card is otherwise free, so the script asks
 `nvidia-smi` for free memory and takes chunk 5 with 450 s pieces above `CHUNK_FREE_MIB=4000`,
 else chunk 3 with 250 s pieces and chunk 2 as the retry. It is worth taking when it fits: in a
 45 min window chunk 5 rendered ~4000 s of audio in 340/349/401/405 s (2.67x) against chunk 3's
@@ -178,7 +188,7 @@ The 192 kbps mp3 encode is transparent: the same
 source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
-join and encode end to end in minutes. Every file is cut into equal pieces (0.5 s overlap; 450 s at
+join and encode end to end in minutes. Every file is cut into equal pieces (0.25 s overlap; 450 s at
 chunk 5, 250 s at chunk 3) and rejoined with `join.py`, which streams and keeps only the overlap
 tail. Output lands in
 `C:\D\Downloads\Manly_P.Hall_Enhanced` — a `C:` path, like the source; `D:\temp_resound` is only
@@ -209,13 +219,17 @@ that bit once and are now guarded:
   card, and killing Chrome's gpu-process at creation (`gpuwatch_event.ps1`, 40 kills) did not stop
   it. What varies is the rate — roughly one per 10-15 min of load, about one per file — and they
   arrive in bursts, so it is not worth preventing, only worth making cheap.
-  The cost of one death is the wasted render (it lands ~13/24 of the way into a piece and only
-  whole batches of 24 chunks are flushed) plus a full re-render of the piece plus whatever wait
-  precedes the retry. So on failure `resume_piece` goes first: hound writes the header when the
+  The cost of one death is the wasted render plus a re-render of the piece plus whatever wait
+  precedes the retry. Nothing reaches the wav until every chunk of a batch is rendered — killing a
+  180 s render 42 s in left 5025770 samples, exactly 24 chunks' worth of 4.75 s hop, and nothing of
+  the batch in flight — so `CHUNKS_PER_BATCH` is the knob on the wasted part: 24 risks 114 s of
+  audio, 8 risks 38 s. It is not worth spending: 8 measured 52.96/53.30 s against 48.59/52.84 s
+  for 24 on 180 s, but the card drifted 9 % across those four runs, so the pair is not separable
+  and 24 stays. So on failure `resume_piece` goes first: hound writes the header when the
   file is created and only rewrites the sizes on finalize, so a killed run leaves a wav whose
   header claims 0 frames while every flushed sample is there — `wavefix.py` prints the true length
-  off the file size, the remainder is cut from `(n - 22050) / 44100` s and rendered, and `join.py`
-  crossfades it onto the tail with the same 0.5 s window the pieces use. Measured on 120 s:
+  off the file size, the remainder is cut from `(n - OV) / 44100` s and rendered, and `join.py`
+  crossfades it onto the tail with the same window the pieces use (`OV`, 0.25 s). Measured on 120 s:
   resumed 120.00 s against a clean 120.00 s (6 samples out of 5.29 M), seam max delta 0.049
   against a global 0.352, and the audio before the seam bit-identical to the clean render. First
   production use: a 312 s piece died 60 s in, its 252.58 s remainder rendered at 2.90x and joined
