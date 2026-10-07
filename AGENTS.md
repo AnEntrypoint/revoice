@@ -206,6 +206,9 @@ Gotchas, each of which has bitten:
   `D:/Manly_P.Hall_Enhanced/...` writes — the same error `OUT` had logged under `why:`. The output side
   is the expensive one: the decode fails before any GPU work, but `OUT` fails *after* the whole file is
   rendered (18B rendered 1600 s and lost it), and it would have hit all 18 names (~2.5 h of GPU).
+  Confirmed in production: `Bible and Christianity 05B - Earth Is the Lord's and the Fullness
+  Thereof` is the first of the 18 to reach the output side since the change, and its `.part` was
+  written into `D:\Manly_P.Hall_Enhanced` — the old form leaves nothing there at all.
 - An empty `ffprobe` duration collapses the plan to one piece (one 1.2 GB enhance), so the plan is
   validated and the file skipped with `FAIL_PLAN`.
 - **Never edit `run_batch.sh` while a run is live**: bash holds a byte offset into the script, so a
