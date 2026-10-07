@@ -97,10 +97,17 @@ delta. Folding the output's own RMS over the 4.5 s hop is not a seam test (conte
 Hz, geometric/arithmetic mean of the power spectrum), corr(log 300-3k, log 8-16k) and the loud-vs-
 quiet drop, per frame then the median across frames — `crest.py`'s aggregation, so the numbers compare
 with the targets here (averaging spectra first reads ~2x lower). Thresholds flat < 0.040, corr > 0.50,
-drop > 25 dB. First 28 finished lectures: flatness 0.0157-0.0375, corr 0.634-0.889, drop 44-273 dB,
-nothing flagged; the spread is the material (0.0375 from a 0.0887 source, 0.0157 from a 0.0363 one).
-**A 200-300 dB drop is material plus the gate, not damage** — the gate drives already-inaudible pauses
-to the 16-bit floor or to exact zero, and both pass.
+drop > 25 dB. First 37 delivered: flatness 0.0061-0.0207, corr 0.634-0.923, drop 44-279 dB, nothing
+flagged; the spread is the material (0.0375 from a 0.0887 source, 0.0157 from a 0.0363 one).
+
+**Both artefacts of the gate read as damage if taken at face value.** It drives pauses to -70..-85 dB,
+where what is left is the render's own floor: on `Bible and Christianity 06A` the quiet frames read
+flatness 0.4493 at -79 dB while its loud frames read 0.0085 against the source's 0.0084 — the render is
+clean, and it only flagged (0.0429) because 35 % of that window is pause, so the *median* frame landed
+on one. It has the lowest signal fraction of the 37. So flatness is now taken over frames within 50 dB
+of the loudest, where broadband hiss would show anyway, and `qa.py` prints both (`flat=` signal,
+`all=` every frame); the loud-vs-quiet drop is what covers hiss confined to the pauses. Same story for
+**a 200-300 dB drop** — already-inaudible pauses pushed to the 16-bit floor or to exact zero; both pass.
 
 ## Upstream comparison and port traps
 
@@ -157,12 +164,14 @@ the batch's nfe 16 is a hair milder (0.0217) and still 3.2x.
 192 kbps mono mp3 (~39 GB vs 89 GB flac / 142 GB wav); `D:\temp_resound` is scratch; on D: because C:
 sits at 99 % with ~36 GB free.
 
-**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 36 files delivered.**
+**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 37 files delivered.**
 A stop costs only the in-flight piece. `bash testsound/lectures/status.sh [N]` answers the whole
 "is it alive / what is in flight / did it land / how fast" set in one read-only pass (it parses `OUT`
 and `TMP` out of `run_batch.sh`, never from the environment — Windows exports `TMP` to an unrelated
 directory). It flags the failure that is otherwise invisible: a joined render sitting in `$TMP/enc.wav`
-with no `.part` in the output dir, which is how the `OUT` bug presented.
+with no `.part` in the output dir, which is how the `OUT` bug presented. The whole `testsound/` tree is
+gitignored — `run_batch.sh`, `qa.py`, `status.sh`, `join.py`, `wavefix.py` live only on disk — which is
+why the facts they carry are written down here instead of left in their comments.
 
 Per file: decode to 44.1 kHz mono, rnnoise prefilter, enhance, encode to `$dest.part`, rename; a
 non-empty output means done, so the run is resumable. Shortest first (`durations.tsv`). Equal pieces
