@@ -345,7 +345,11 @@ It is validated end to end on a whole file, not just on slices: `Love Series 3B 
 measures flat 0.0270 / corr +0.830 / drop 62.64 dB, against 0.0271 / +0.901 / 275.98 dB for the
 same file under the full-depth gate — the 275 dB and the higher corr are the clamped digital
 silence, not a better render: the reduced gate leaves the pause floor at -85 dB (-86.66 in
-8-16 kHz) where the full one leaves exactly zero.
+8-16 kHz) where the full one leaves exactly zero. On material whose render is already quiet in the
+pauses it crosses the 16-bit floor anyway: the first production file with this chain, `Love Series
+4B`, reads drop 279 dB (quiet frames exactly zero) at flat 0.0248 / corr +0.905 / 8-16 kHz loud
+-20.69. Both pass — the pauses are inaudible at -85 dB and at zero — so a 200-300 dB drop in
+`qa.py` is material plus gate, not damage.
 
 Mixing the denoised copy into the *output* instead of the input measures worse, and the reason is
 worth keeping: the render is a fresh realization (sample-correlation 0.008-0.018 with its own
