@@ -326,10 +326,8 @@ delivered chain (prefiltered, gated, level restored):
 So what rnnoise buys is 0.0003-0.0007 of flatness and 1-2 dB of pause floor, and the loud speech
 band moves 0.2-0.4 dB: resound re-synthesizes the whole waveform, so most of rnnoise's work is
 overwritten by it. If the result does not sound like rnnoise is in the chain, that is why — it is
-in, ahead of resound, and this is what survives. End to end on a real 447.66 s lecture: prefilter
-5 s, render 133.78 s (3.35x), encode 6 s, `OK wall_s=149`, and `qa.py` on the result reads
-flat=0.0271 corr=+0.901 (passes) against the source's 0.0355 / +0.193. Listening A/B for the four
-variants on both slices: `C:\D\Downloads\resound_ab_prefilter\`.
+in, ahead of resound, and this is what survives. Listening A/B for the four variants on both
+slices: `C:\D\Downloads\resound_ab_prefilter\`.
 
 The gate is last (`agate=threshold=0.00316:ratio=4:range=0.415:attack=20:release=200:detection=rms`).
 `range` is the deepest cut it will make, 0.1 being -20 dB, and it runs at 38.2 % of that depth
@@ -338,10 +336,11 @@ the material: 5.0-5.1 dB off the quiet-frame 300-3k level (-63.29 -> -68.41 and 
 with the loud frames unchanged to 0.3 dB. At the full 0.1 it drove the pauses to digital silence,
 which is more than the material needs.
 It is validated end to end on a whole file, not just on slices: `Love Series 3B - Love of God`,
-447 s in one piece at chunk 5, ran 3.30x and its finished mp3 measures flat 0.0270 / corr +0.830 /
-drop 62.64 dB, against 0.0271 / +0.901 / 275.98 dB for the same file under the full-depth gate —
-the 275 dB and the higher corr are the clamped digital silence, not a better render: the reduced
-gate leaves the pause floor at -85 dB (-86.66 in 8-16 kHz) where the full one leaves exactly zero.
+447.63 s in one piece at chunk 5, render 135.59 s (3.30x) plus 7 s of encode, and its finished mp3
+measures flat 0.0270 / corr +0.830 / drop 62.64 dB, against 0.0271 / +0.901 / 275.98 dB for the
+same file under the full-depth gate — the 275 dB and the higher corr are the clamped digital
+silence, not a better render: the reduced gate leaves the pause floor at -85 dB (-86.66 in
+8-16 kHz) where the full one leaves exactly zero.
 
 Mixing the denoised copy into the *output* instead of the input measures worse, and the reason is
 worth keeping: the render is a fresh realization (sample-correlation 0.008-0.018 with its own
