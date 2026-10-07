@@ -39,13 +39,15 @@ and 0.33x in the same hour.
 
 Every Chrome on this box is headless gm automation (no window: check `MainWindowTitle`), and a new
 one comes back within minutes of being killed, so one kill per piece is not enough —
-`testsound/lectures/gpuwatch.sh` kills every non-resound CUDA client every 45 s while
-`resound.exe` is alive. `nvidia-smi -pl` and `-c` both answer Insufficient Permissions here, so
-the power cap and exclusive compute mode are not available; the card runs 82-83 C at ~60 W with
-clocks pinned 1267/2100 MHz (SW Thermal Slowdown) and still delivers ~2.5x, so heat is not worth
-waiting on, contention is. VRAM headroom decides the chunk size: chunk 5 needs ~3.6 GB, so it
-fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills the process.
-Prefer ratios inside one run over absolute ms.
+`testsound/lectures/gpuwatch.sh` kills every non-resound CUDA client every 10 s while
+`resound.exe` is alive. It kills Chrome's `--type=gpu-process` and not the browser, because Chrome
+counts those as GPU crashes and drops to software compositing after a few — the one state in which
+it stops asking for the card at all. `nvidia-smi -pl` and `-c` both answer Insufficient
+Permissions here, so the power cap and exclusive compute mode are not available; the card runs
+82-83 C at ~60 W with clocks pinned 1267/2100 MHz (SW Thermal Slowdown) and still delivers ~2.5x,
+so heat is not worth waiting on, contention is. VRAM headroom decides the chunk size: chunk 5
+needs ~3.6 GB, so it fits alone (6.1 GB) but not alongside Chrome, where the driver silently kills
+the process. Prefer ratios inside one run over absolute ms.
 
 ## Memory
 
@@ -94,7 +96,10 @@ sequence or tensor shapes changes every RNG draw, so waveform correlation betwee
 configs is ~0.016 and means nothing. Compare instead: per-frame log-mel cosine (0.97 between
 equivalent renders, 0.78 against the input on lecture speech) and average magnitude spectrum.
 Seam clicks: max adjacent-sample delta inside the overlap window must stay below the file's global
-max delta.
+max delta. Folding the output's own RMS over the 4.5 s hop is not a seam test — speech dynamics
+dominate it (the *source* folds to -6.7 dB at frame 0 where our render of a different file folds to
++5.9 dB). Fold the RMS of out/src instead, which removes the content: on a 60 s batch render the
+overlap window averages -5.62 dB and the rest of the period -5.24 dB, with no dip at the boundary.
 
 ## Quality: how "damaged" was found and fixed
 
@@ -153,7 +158,8 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 `D:\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
 Config: `GEMM=tf32 NFE=16 CHUNK=5 OVERLAP=0.5`, about 3.2x realtime on a free card, so ~6 days
 plus ~20 h of decode/encode. Run it behind `gpuwatch.sh` (see above) or contention takes it to
-0.33x.
+0.33x. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290 taken
+from a batch mp3 and 0.0294 from a wav render of the same source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
 join and encode end to end in minutes. Every file is cut into equal 450 s pieces (0.5 s overlap)
@@ -168,6 +174,8 @@ that bit once and are now guarded:
 - `ffmpeg` reads stdin and will eat the file list out from under a `while read` loop; every call
   is `-nostdin` with `</dev/null`. `ffprobe` has no `-nostdin` (it errors on the flag), so it only
   gets `</dev/null`.
+- The encode needs an explicit `-f mp3`: a `.part` suffix hides the extension `ffmpeg` guesses the
+  muxer from.
 - An empty `ffprobe` duration silently collapses the plan to one piece, which on a long file means
   one 1.2 GB enhance; the plan is validated and the file is skipped with `FAIL_PLAN`.
 - Stopping a background task kills the wrapper, not the script, and two live instances share one
@@ -181,8 +189,10 @@ that bit once and are now guarded:
 - A run that prints `device=Cpu` has lost CUDA and is ~1000x slower while looking perfectly
   healthy. It happened once when the machine suspended mid-run and came back with
   `cuda:0 unavailable`; `run_enhance` now checks every piece for that line and stops the batch.
-  `stayawake.ps1` holds an `ES_CONTINUOUS|ES_SYSTEM_REQUIRED` request for the life of the run
-  because `powercfg /change` and `/setacvalueindex` both answer Invalid Parameters here.
+  `stayawake.ps1` holds an `ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED` request for the
+  life of the run because `powercfg /change` and `/setacvalueindex` both answer Invalid Parameters
+  here; the flags are written as the decimal 2147483651, since PowerShell parses `0x80000003` as a
+  negative int and refuses the cast.
 - Start it detached: `start_batch.bat` (and `start_watch.bat`) launched with `Start-Process`, since
   a `run_in_background` task dies with the session. `Start-Process -ArgumentList '-c','cmd'` does
   not quote the second element, so bash sees `-c cmd` and silently runs the first word — put the
