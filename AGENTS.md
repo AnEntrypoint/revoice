@@ -31,8 +31,9 @@ runs. Absolute timings are worthless across minutes: the same binary on the same
 36 s and 58 s, and with Chrome doing continuous GPU work a 60 s clip took 345 s (0.17x) where the
 same clip took 36 s (1.67x) minutes later after `nvidia-smi --query-compute-apps` showed which
 Chrome pids held CUDA contexts and those two were killed (GPU 100 %/2246 MiB -> 0 %/21 MiB). So
-before any timing run: check `--query-compute-apps`, kill the pids holding contexts, and confirm
-util is near 0 and memory near 0. Only compare runs that are back to back, and after sustained
+before any timing run: read `--query-compute-apps` and note who else is resident, because we no
+longer kill them (see below), and take the number as a ratio between two runs made back to back
+under the same residency. Only compare runs that are back to back, and after sustained
 load let it cool ~75 s first. Sharing costs ~10x, not 3x: the same 60 s clip at nfe 16 took
 17.8 s alone and 183.9 s with one headless Chrome context beside it, and nfe 32 measured 2.72x
 and 0.33x in the same hour.
@@ -163,12 +164,14 @@ upstream's `to_mel(drop_last=True)` does; empirically both give the same frame c
 ## Batch
 
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) into
-`D:\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
-Config: `GEMM=tf32 NFE=16 CHUNK=3 OVERLAP=0.5` — chunk 3, not 5, because the card is shared with
-Chrome (see above) and chunk 5 gets reclaimed mid-piece. Chunk 3 measured the same speed as chunk 5
+`C:\D\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav).
+Config: `GEMM=tf32 NFE=16 CHUNK=3 RETRY_CHUNK=2 OVERLAP=0.5 MAXPIECE=450` — chunk 3, not 5,
+because the card is shared with Chrome (see above): chunk 5 is ~3.2 GB and Chrome holds ~2.2 GB,
+past the ~5.5 GB the driver tolerates. Chunk 3 measured the same speed as chunk 5
 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free), it just duplicates 17 % of the audio instead of
-11 %. About 3.2x realtime on a free card when nothing dies, so ~6 days plus ~20 h of decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290 taken
-from a batch mp3 and 0.0294 from a wav render of the same source.
+11 %. About 2.5-3.2x realtime on a shared card when nothing dies, so ~6 days plus ~20 h of
+decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290
+taken from a batch mp3 and 0.0294 from a wav render of the same source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
 join and encode end to end in minutes. Every file is cut into equal 450 s pieces (0.5 s overlap)
@@ -189,27 +192,37 @@ that bit once and are now guarded:
   one 1.2 GB enhance; the plan is validated and the file is skipped with `FAIL_PLAN`.
 - Stopping a background task kills the wrapper, not the script, and two live instances share one
   temp dir and corrupt each other's pieces; the script now takes a `$TMP/.lock` pid lock.
-- A silent resound death is VRAM or a driver reset: the script waits for the card under 85 C and
-  under 1.5 GB used before each piece — capped at 12 polls x 20 s, so never more than 4 min — then
-  retries twice at chunk 3. They are the GPU falling over, not contention: every one pairs with an
-  nvlddmkm Event ID 153, "Error occurred on GPUID: 100", in the System log (12 in 3 h; 09:10:13
-  second-exact with a death timed from the log). Query it by `ProviderName`, not `Message` — the
-  message is null there, so a message-match filter finds nothing. `TdrDelay` and `TdrLevel` are
-  unset, so WDDM's 2 s default applies and raising them would need admin and a reboot. Chrome is
-  not the cause: killing its gpu-process at creation (`gpuwatch_event.ps1`, 40 kills) did not stop
-  them. What they do is arrive in bursts — six in four minutes once — so `settle()` waits for two
-  minutes with no new nvlddmkm event before a retry, and now before every piece too (it costs one
-  event query on a healthy card). Waiting does not prevent a death that starts mid-piece; it is
-  about one per file either way. What it prevents is the *retry* landing inside the burst, which is
-  the state that loses the file rather than the piece: `Love Series 1B - Human Love` was lost to
-  exactly that and recovered on the next run.
-  Chunk 3 costs no speed against chunk 5 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free) and
-  every chunk-3 retry has completed, so it is the candidate first attempt next run — but it
-  duplicates 17 % of the audio instead of 11 % and puts more chunks through a piece.
-  The temperature gate used to be 78 C, which bought minutes of idle per piece for nothing — at
-  83 C and 1267 MHz a 539 s file still ran 2.57x. Pieces are 450 s because a longer one dies: candle has no pooling allocator, so
-  every chunk is thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min
-  piece dies past ~100 chunks, while the same audio in 450 s pieces does not.
+- A silent resound death is the GPU falling over, not contention: rc=127, no message, and an
+  nvlddmkm Event ID 153 ("Error occurred on GPUID: 100") beside it in the System log (12 in 3 h;
+  09:10:13 second-exact with a death timed from the log). Query it by `ProviderName`, not
+  `Message` — the message is null there, so a message-match filter finds nothing. `TdrDelay` and
+  `TdrLevel` are unset, so WDDM's 2 s default applies and raising them would need admin and a
+  reboot. It is not VRAM and not Chrome: it happens at chunk 3 (~2.3 GB) with nothing else on the
+  card, and killing Chrome's gpu-process at creation (`gpuwatch_event.ps1`, 40 kills) did not stop
+  it. What varies is the rate — roughly one per 10-15 min of load, about one per file — and they
+  arrive in bursts, so it is not worth preventing, only worth making cheap.
+  The cost of one death is the wasted render (it lands ~13/24 of the way into a piece and only
+  whole batches of 24 chunks are flushed) plus a full re-render of the piece plus whatever wait
+  precedes the retry. So on failure `resume_piece` goes first: hound writes the header when the
+  file is created and only rewrites the sizes on finalize, so a killed run leaves a wav whose
+  header claims 0 frames while every flushed sample is there — `wavefix.py` prints the true length
+  off the file size, the remainder is cut from `(n - 22050) / 44100` s and rendered, and `join.py`
+  crossfades it onto the tail with the same 0.5 s window the pieces use. Measured on 120 s:
+  resumed 120.00 s against a clean 120.00 s (6 samples out of 5.29 M), seam max delta 0.049
+  against a global 0.352, and the audio before the seam bit-identical to the clean render. Only
+  if that fails does it retry at chunk 2.
+  Waiting is what used to make a death expensive, and it was unconditional: `settle()` waited for
+  two minutes of quiet in the event log before every piece. `ready()` asks the card instead — one
+  1 s render at nfe 8 over `probe1s.wav`, ~4 s — and settles only when that fails, so a healthy
+  card costs 4 s a piece instead of 126 s. Bursts are still real (six events in four minutes once)
+  and a retry landing inside one loses the file rather than the piece — `Love Series 1B - Human
+  Love` went exactly that way and recovered on the next run — so the wait stays, behind the probe.
+- Pieces are 450 s because a longer one dies: candle has no pooling allocator, so every chunk is
+  thousands of cudaMalloc/cudaFree cycles and a chunk-5 run over a whole 30 min piece dies past
+  ~100 chunks, while the same audio in 450 s pieces does not. The gate before a piece is under
+  85 C and under 1.5 GB used, capped at 12 polls x 20 s so never more than 4 min; it used to be
+  78 C, which bought minutes of idle per piece for nothing — at 83 C and 1267 MHz a 539 s file
+  still ran 2.57x.
 - A run that prints `device=Cpu` has lost CUDA and is ~1000x slower while looking perfectly
   healthy. It happened once when the machine suspended mid-run and came back with
   `cuda:0 unavailable`; `run_enhance` now checks every piece for that line and stops the batch.
@@ -217,10 +230,11 @@ that bit once and are now guarded:
   life of the run because `powercfg /change` and `/setacvalueindex` both answer Invalid Parameters
   here; the flags are written as the decimal 2147483651, since PowerShell parses `0x80000003` as a
   negative int and refuses the cast.
-- Start it detached: `start_batch.bat` (and `start_watch.bat`) launched with `Start-Process`, since
-  a `run_in_background` task dies with the session. `Start-Process -ArgumentList '-c','cmd'` does
-  not quote the second element, so bash sees `-c cmd` and silently runs the first word — put the
-  whole command in the .bat instead.
+- Start it detached: `start_batch.bat` launched with `Start-Process`, since a `run_in_background`
+  task dies with the session. `Start-Process -ArgumentList '-c','cmd'` does not quote the second
+  element, so bash sees `-c cmd` and silently runs the first word — put the whole command in the
+  .bat instead. `start_watch.bat`, `start_guard.bat` and `start_event.bat` launch the Chrome
+  killers, which are switched off (see above); do not start them.
 
 ## Chunk seams
 
