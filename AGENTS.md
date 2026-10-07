@@ -361,6 +361,27 @@ Mixing the denoised copy into the *output* instead measures worse: the render is
 against the delivered -68.41 / -64.59, flatness to 0.0295 / 0.0334 against 0.0195 / 0.0225 — barely
 better than the source's 0.0312 / 0.0387.
 
+### Room tone ("dry mouthed")
+
+The render is clean but dead, and the complaint is about the pauses, not the voice: source pauses
+-46 dBFS -> resound -89 -> delivered chain -99.6, with speech medians unchanged. Dropping the gate
+buys back only ~10 of those ~53 dB, so the floor has to be put back rather than preserved.
+
+The bed is the recording's own noise, which is exactly what rnnoise removes: run the source through
+`arnndn` twice, `mix=0` and `mix=1`, and subtract. Both arms through `arnndn` is what makes the
+subtraction work — its delay is fractional (44.1->48->44.1 resample pair), so no integer `adelay`
+lines the two up and subtracting the raw source combs instead. Flatten the residual with `compand`
+or it still tracks the voice (envelope corr 0.727, quiet -47 / loud -35 dBFS -> spread 6.6 dB, corr
+0.324 after). Mix it in **after** `agate` and `volume` — the gate would otherwise cut it.
+
+`testsound/lectures/bed.sh SRC bed.wav [START] [LEN]` builds it. 60 s is enough: an excerpt bed
+matches one from the whole file to <=1.09 dB per band and 0.05 dB RMS, and `run_batch.sh` loops it
+with `-stream_loop -1`, so it costs ~2 s per file instead of ~33 s. Verified: byte-identical to the
+bed behind the listening samples (md5 match, 3.0 s), constant -58.6 dBFS across a 180 s loop with the
+two loop seams at 0.00092 against the bed's own 0.00418 max delta, and it leaves the program level
+untouched. Two depths have been cut for listening in `C:\D\Downloads\resound_ab_dry\` — pauses at
+-61 dBFS (bed as built) and -52 dBFS (bed +10 dB) — **not yet wired in**, pending the choice.
+
 ## Model geometry
 
 mel 128 ch, hop 420; AE latent 64; CFM WaveNet 30 layers, dilation cycle 5, hidden 512, nfe 64 gives
