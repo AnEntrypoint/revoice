@@ -169,8 +169,9 @@ Config: `GEMM=tf32 NFE=16 CHUNK=3 RETRY_CHUNK=2 OVERLAP=0.5 MAXPIECE=450` — ch
 because the card is shared with Chrome (see above): chunk 5 is ~3.2 GB and Chrome holds ~2.2 GB,
 past the ~5.5 GB the driver tolerates. Chunk 3 measured the same speed as chunk 5
 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free), it just duplicates 17 % of the audio instead of
-11 %. About 2.5-3.2x realtime on a shared card when nothing dies, so ~6 days plus ~20 h of
-decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290
+11 %. A piece measures 2.7-2.9x and a whole file lands at 1.9-2.4x inclusive, the gap being deaths
+and the waits around them; 933 s of audio took 486 s with one death in it. So ~9 days rather than
+~6 for the 447.8 h, plus ~20 h of decode/encode. The 192 kbps mp3 encode is transparent: the same 60 s slice measures flatness 0.0290
 taken from a batch mp3 and 0.0294 from a wav render of the same source.
 
 Ordering is shortest first (from `durations.tsv`), so the first files prove decode, enhance, piece
@@ -209,8 +210,14 @@ that bit once and are now guarded:
   off the file size, the remainder is cut from `(n - 22050) / 44100` s and rendered, and `join.py`
   crossfades it onto the tail with the same 0.5 s window the pieces use. Measured on 120 s:
   resumed 120.00 s against a clean 120.00 s (6 samples out of 5.29 M), seam max delta 0.049
-  against a global 0.352, and the audio before the seam bit-identical to the clean render. Only
-  if that fails does it retry at chunk 2.
+  against a global 0.352, and the audio before the seam bit-identical to the clean render. First
+  production use: a 312 s piece died 60 s in, its 252.58 s remainder rendered at 2.90x and joined
+  to 312.08 s against the sibling piece's 312.05 s, seam max delta 0.0396 against a global 0.2917,
+  finished mp3 933.83 s against a 933.67 s source.
+  A resume render can die too, and it leaves its own partial in `resume.enhance.wav`, which a retry
+  used to delete — one death threw away 205 s of already-rendered audio that way. `salvage_resume`
+  joins it onto the piece before retrying, so up to three attempts accumulate progress and only the
+  last resort re-renders the whole piece at chunk 2.
   Waiting is what used to make a death expensive, and it was unconditional: `settle()` waited for
   two minutes of quiet in the event log before every piece. `ready()` asks the card instead — one
   1 s render at nfe 8 over `probe1s.wav`, ~4 s — and settles only when that fails, so a healthy
