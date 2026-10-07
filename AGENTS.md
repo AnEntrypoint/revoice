@@ -36,7 +36,12 @@ longer kill them (see below), and take the number as a ratio between two runs ma
 under the same residency. Only compare runs that are back to back, and after sustained
 load let it cool ~75 s first. Sharing costs ~10x, not 3x: the same 60 s clip at nfe 16 took
 17.8 s alone and 183.9 s with one headless Chrome context beside it, and nfe 32 measured 2.72x
-and 0.33x in the same hour.
+and 0.33x in the same hour. A context that is only *resident*, not rendering, costs ~25 %: three
+consecutive pieces of one file measured 2.68x, 2.57x and 3.22x, and the two slow ones are the ones
+`gpustate` logged a chrome.exe beside (13:40:03, 13:42:44). That is why the batch does not dodge
+Chrome — chunk 3 is the only size that fits in VRAM next to it and it measures 1.97x, worse than
+2.57x — and why the run's throughput ranges between roughly 2.6x and 3.3x depending on who else is
+on the card.
 
 The machine is in use: **never kill Chrome.** `gpuwatch.sh`, `gpuwatch_guard.sh` and
 `gpuwatch_event.ps1` all killed its `--type=gpu-process` on a timer; that is off now, and the batch
