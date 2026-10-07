@@ -174,9 +174,10 @@ count.
 ## Batch
 
 `testsound/lectures/run_batch.sh` enhances the 588 lecture mp3s (447.8 h) from
-`C:\D\Downloads\Manly_P.Hall_Digitally_Restored_Audio_Lectures` into
-`C:\D\Downloads\Manly_P.Hall_Enhanced` as 192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav);
-`D:\temp_resound` is scratch. Config `GEMM=tf32 NFE=16 OVERLAP=0.25`, chunk and piece length per
+`C:\D\Downloads\Manly_P.Hall_Digitally_Restored_Audio_Lectures` into `D:\Manly_P.Hall_Enhanced` as
+192 kbps mono mp3 (~39 GB, vs 89 GB flac / 142 GB wav); `D:\temp_resound` is scratch. It is on D:
+because C: sits at 99 % with ~36 GB free, which the finished run does not fit in; the pre-vocoder-fix
+renders are `D:\Manly_P.Hall_damaged_vocoder`. Config `GEMM=tf32 NFE=16 OVERLAP=0.25`, chunk and piece length per
 file from `pick_chunk()`: chunk 5 with 450 s pieces above `CHUNK_FREE_MIB=4000` MiB free, else
 chunk 3 with 250 s, and chunk 3 (2 under a 3) is the retry. Chunk 10 was tried as a third tier
 above 5000 MiB and reverted: 2 % faster but 234 s of audio per flush batch instead of 114 s, so it
