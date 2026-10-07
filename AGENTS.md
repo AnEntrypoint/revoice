@@ -60,7 +60,9 @@ instead of as a speedup.
 chunk 10 ≈ 4.1 GB, chunk 15 ≈ 5.3 GB, chunk 20 OOMs. Past ~5.5 GB the driver kills the process
 (exit 127, no message) or candle returns `CUDA_ERROR_OUT_OF_MEMORY`. Defaults are 5 s / 0.5 s
 overlap: processed_seconds = audio_seconds * chunk / (chunk - overlap), so overlap is duplicated
-work and 0.5 s keeps it at 11 % while staying well above the 2048-sample seam align window.
+work and 0.5 s keeps it at 11 %. It no longer has to clear a 2048-sample search window — that was
+the cross-correlation seam aligner, which is gone — only to be long enough to crossfade, and the
+only offset it has to absorb is the model's constant ~120 ms of delay.
 
 Host RAM, not VRAM, is the other limit on long files. `process_file` now streams: it drops the
 source buffer right after resampling, cuts each 5 s window straight out of the resampled buffer,
