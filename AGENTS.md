@@ -194,8 +194,8 @@ that bit once and are now guarded:
   nvlddmkm Event ID 153, "Error occurred on GPUID: 100", in the System log (12 in 3 h; 09:10:13
   second-exact with a death timed from the log). Query it by `ProviderName`, not `Message` — the
   message is null there, so a message-match filter finds nothing. `TdrDelay` and `TdrLevel` are
-  unset, so WDDM's 2 s default applies; raising them needs admin and a reboot. Chrome is not the
-  cause: killing its gpu-process at creation (see `gpuwatch_event.ps1`) did not stop them.
+  in the run: `settle()` waits for two minutes with no new nvlddmkm event before retrying (then
+  `cool()`), which is what recovered the file straight after it was lost.
   Chunk 3 costs no speed against chunk 5 (A/B/A/B on 60 s: 54/52 s contended, 18/17 s free) and
   every chunk-3 retry has completed, so it is the candidate first attempt next run — but it
   duplicates 17 % of the audio instead of 11 % and puts more chunks through a piece.
