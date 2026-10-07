@@ -203,9 +203,11 @@ instead of 114 s, so it doubles the window in which a death loses the whole piec
 baseline of 390/486/519 s for ~2755 s (1.97x), and it duplicates 11 % of the audio instead of 20 %.
 Deaths scale with process starts as well as time under load — 225 s pieces lost 11.5 per
 audio-hour, chunk 3 at 450 s 6.5, chunk 5 at 450 s 4.5 — which is why the 225 s experiment was
-reverted. Pieces measure 3.26-3.38x and a whole ~1122 s file lands at 3.0x end to end — 371 s for
-decode, three pieces, join and encode — so ~6 days of enhancing for the 447.8 h rather than ~9,
-plus ~20 h of decode/encode.
+reverted. Pieces measure 3.26-3.38x with the card to themselves, and files land at 2.35-3.0x end to
+end: three consecutive ones measured 2.68x, 2.52x and 2.35x (3580 s of audio in 1429 s), but that
+window held two deaths, a resident Chrome for two of the nine pieces and a CPU-heavy sweep running
+beside it, and a file with none of those is 3.0x (371 s for ~1122 s). So 6-7.5 days of enhancing for
+the 447.8 h rather than ~9, plus ~20 h of decode/encode.
 The 192 kbps mp3 encode is transparent: the same
 60 s slice measures flatness 0.0290 taken from a batch mp3 and 0.0294 from a wav render of the same
 source.
