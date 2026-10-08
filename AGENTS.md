@@ -170,8 +170,8 @@ nfe 16 is a hair milder (0.0217) and still 3.2x.
 kbps mono mp3 (~39 GB vs 89 GB flac / 142 GB wav); `D:\temp_resound` is scratch; on D: because C: sits
 at ~100 %.
 
-**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %; 70 of 588 delivered
-(2026-10-08), 2 withheld.** A stop costs only the in-flight piece.
+**Live config: `GEMM=tf32 NFE=16 OVERLAP=0.25`, prefilter on, gate at 38.2 %, legibility tilt on;
+89 of 588 delivered (2026-10-08), 2 withheld.** A stop costs only the in-flight piece.
 
 `bash testsound/lectures/status.sh [N]` answers "is it alive / what is in flight / did it land / how
 fast" in one read-only pass (it parses `OUT`/`TMP` out of `run_batch.sh`, never the environment — Windows
@@ -367,6 +367,31 @@ the listening samples (md5 match, 3.0 s), constant -58.6 dBFS across a 180 s loo
 at 0.00092 against the bed's own 0.00418 max delta, and it leaves the program level untouched. Two depths
 are cut for listening in `C:\D\Downloads\resound_ab_dry\` — pauses at -61 dBFS (bed as built) and -52 dBFS
 (bed +10 dB) — **not yet wired in**, pending the choice.
+
+### Legibility
+
+The render is less legible than its own source: it adds low-mid and leaves the consonant band where it
+was. Band medians over speech frames (`D:\bedqa\bands.py`, 60 s at 300 s), 4A / 19B:
+
+| | 120-300 Hz | 300-1k | 1-4k | consonant/vowel |
+|---|---|---|---|---|
+| source | +10.4 / +12.2 | +3.3 / +8.7 | -0.7 / -0.8 | **-4.0 / -9.6 dB** |
+| delivered | +18.7 / +17.3 | +11.8 / +13.0 | -2.0 / -2.4 | **-13.8 / -14.8 dB** |
+
+~8 dB of 100-300 Hz arrives from nowhere and consonants end up 6-10 dB further below vowels. Fixed with
+a tilt, last in the chain after `agate` and `volume` so neither the gate's rms detection nor the level
+correction sees it: `equalizer=f=200:t=q:w=1.0:g=-7,equalizer=f=2800:t=q:w=0.9:g=6` (`TILT_LO*` /
+`TILT_HI*` in `run_batch.sh`, `TILT=0` to skip). It lands consonant/vowel at -8.4 / -9.2 dB — the
+source's own balance on 19B (-9.6), the conservative end of it on 4A (-4.0). Lifting the consonant band
+*without* the low cut reaches only -10.7 / -11.1, so the cut is what does the work; -9/+8 overshoots the
+source by 2 dB and -5/+4 gives back half the gap.
+
+The tilt lifts 100-4000 Hz flatness 0.0134 -> 0.0356 while adding no noise at all — a linear filter
+cannot, and the pauses are already at the 16-bit floor (quiet-frame bands read exactly zero). It is pure
+spectral tilt, which is why `corr` *improves* (0.879 -> 0.920). So `qa.py` applies the inverse tilt
+before measuring: an EQ'd file then reads 0.0133 against its own pre-EQ 0.0134, and the 0.040 ceiling
+stays calibrated on the render. Files delivered before the tilt are re-encoded rather than re-rendered
+— a second mp3 generation moves every band a uniform -0.27 dB and leaves consonant/vowel unchanged.
 
 ## Model geometry
 
