@@ -247,7 +247,21 @@ Gotchas, each of which has bitten:
   `testsound/lectures/batch.out` (stderr), not `batch.log`. It leaves `$TMP/.lock` behind, harmlessly —
   the check is `kill -0` on the pid. `start_batch.bat` now records the log's line count and restarts
   (30 s, up to 50x) if no `BATCH_DONE` appears in the lines that run appended; scoping matters, the log
-  holds every earlier run's `BATCH_DONE`.
+  holds every earlier run's `BATCH_DONE`. It can also leave **no trace at all**: one death had `batch.out`
+  untouched since the run's first hour (mtime proves it, since the wrapper appends to it) — stale lock,
+  3 of 5 pieces done, nothing in either file. Silence in the log watch is then the only detector, so a
+  monitor window with zero events is worth a `status.sh` rather than an assumption that a render is long.
+- **A finished `.part` is worth keeping.** bash can die after the encode completes and before the
+  rename, and the run would otherwise re-render the whole file. `ffprobe` the `.part` against
+  `durations.tsv` and rename if it matches — `Health and Healing 05B` decoded to 2019.71 s against a
+  2019.50 s source, so it was complete and was promoted rather than re-rendered.
+- **`start_batch.bat` must call Windows' own tools by full path.** Git's `usr\bin` sits at position 2-7
+  in PATH and `system32` at 16, so a bare `find /c /v ""` runs *GNU* find, which treats `/c` as a path
+  and walks all of C: — `find: '/c/$Recycle.Bin/S-1-5-18': Permission denied`, minutes of disk, no line
+  count. Bash is then never started, so the run has no supervisor: that is how a run died with no
+  restart logged and no trace, invisible in the wrapper's discarded console. Now
+  `%SystemRoot%\System32\find.exe` / `more.com` / `findstr.exe`. Editing the .bat while a wrapper is
+  executing it is the same byte-offset hazard as `run_batch.sh` — check for a live `cmd.exe` first.
 
 ### Making a GPU death cheap
 
